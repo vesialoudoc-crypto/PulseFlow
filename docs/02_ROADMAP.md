@@ -46,10 +46,10 @@ The repository contains the linked documents `00_PROJECT_CONTEXT.md`, `01_SOURCE
 
 ### Goals
 
-- Create a minimal ASP.NET Core API that accepts an event or a small batch.
-- Define the first version of the contract, validation rules, and request result.
+- Create a minimal ASP.NET Core API for event ingestion using the accepted v1 event envelope.
+- Define the remaining first-version HTTP contract, validation rules, and request result.
 - Persist accepted data in PostgreSQL.
-- Provide a minimal way to verify the persisted result.
+- Verify persistence with an integration test that may inspect PostgreSQL directly.
 - Prepare reproducible local execution and basic automated tests.
 
 ### Learning Objectives
@@ -61,11 +61,21 @@ The repository contains the linked documents `00_PROJECT_CONTEXT.md`, `01_SOURCE
 
 ### Expected Result
 
-From a clean environment, one can start the application and PostgreSQL, submit a valid request, see the persisted result, and receive a predictable error for an invalid request. The first-version contract and constraints are documented.
+From a clean environment, one can start the application and PostgreSQL, submit a valid ingestion request, have an integration test confirm the persisted data directly in PostgreSQL, and receive a predictable error for an invalid request. The first-version contract and constraints are documented. A public retrieval endpoint is not required to verify persistence for this stage.
+
+### Current Scope Clarifications
+
+- PulseFlow is a production-style event ingestion and processing system, not a CRUD API for events.
+- The accepted Event Contract v1 envelope and its opaque arbitrary JSON object `payload` remain unchanged.
+- A technical event identifier may exist in the persistence model, but it does not imply that `GET /api/events/{id}` is a primary user flow or a Stage 1 requirement.
+- An integration test may verify successful ingestion by querying PostgreSQL directly; no public GET endpoint is required solely for persistence verification.
+- A query or retrieval API for operators or data consumers has not been defined.
+- The mechanism that transfers persisted events to later processing has not been defined.
+- Batch ingestion semantics have not been accepted.
 
 ### Do Not Decide in Advance
 
-The queue, Redis, multiple application instances, the final event schema, or the cloud topology.
+Do not select RabbitMQ, Redis, polling, a queue or stream technology, delivery guarantees, idempotency semantics, an API query model, batch ingestion semantics, multiple application instances, the final event schema, or the cloud topology before a separate decision establishes the need and criteria.
 
 ## Stage 2: Asynchronous Processing
 
