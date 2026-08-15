@@ -43,6 +43,8 @@ Do not interpret roadmap items as already accepted architecture.
 
 ## Documentation updates
 
+- Write all project documentation in English.
+
 After a meaningful implementation change:
 
 - update `docs/04_CURRENT_STATE.md`;
