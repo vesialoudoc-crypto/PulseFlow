@@ -93,6 +93,7 @@ A successful result is a repository in which one can:
 
 - [`01_SOURCE_OF_TRUTH.md`](01_SOURCE_OF_TRUTH.md) — stable product boundaries and mandatory properties.
 - [`02_ROADMAP.md`](02_ROADMAP.md) — the sequence of stages, goals, and expected results.
+- [`contracts/`](contracts/) — accepted external contracts and their human-readable semantics. Runtime OpenAPI documents the HTTP surface that is actually implemented.
 - [`progress/`](progress/) — chronological checkpoint/handoff records. The most recent filename describes the current repository state, verification results, unresolved items, and the next recommended step.
 - [`architecture/`](architecture/) — architecture that has actually been implemented or accepted.
 - [`decisions/`](decisions/) — accepted architectural decisions and their consequences.

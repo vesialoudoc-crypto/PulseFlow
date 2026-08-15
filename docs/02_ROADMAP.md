@@ -42,7 +42,7 @@ The repository contains the linked documents `00_PROJECT_CONTEXT.md`, `01_SOURCE
 
 ## Stage 1: Basic Data Ingestion
 
-**Status:** Not started
+**Status:** In progress
 
 ### Goals
 

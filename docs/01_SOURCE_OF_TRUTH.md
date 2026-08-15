@@ -100,8 +100,8 @@ Local execution, testing, and deployment must be documented and automated where 
 
 ## Not Yet Decided
 
-- the event format and final schema;
-- the public API contract and batch-size limits;
+- the final event schema beyond the accepted versioned ingestion envelope;
+- HTTP endpoint paths, response shapes, batch behavior, and batch-size limits;
 - the exact data model and migration strategy;
 - the boundary between synchronous and asynchronous work;
 - the queue technology and delivery guarantees;

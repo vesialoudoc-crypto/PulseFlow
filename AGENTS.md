@@ -28,6 +28,7 @@ Use the documents for different kinds of information:
 - `00_PROJECT_CONTEXT.md` — project purpose, learning goals, and working principles.
 - `01_SOURCE_OF_TRUTH.md` — stable product boundaries and mandatory properties.
 - `02_ROADMAP.md` — planned sequence of implementation and learning stages.
+- `docs/contracts/` — accepted external contracts and their human-readable semantics.
 - `docs/progress/` — immutable chronological checkpoints describing the state reached
   at each meaningful milestone, verification results, unresolved questions, and the
   next recommended step.
