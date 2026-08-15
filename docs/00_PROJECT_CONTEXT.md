@@ -93,13 +93,15 @@ A successful result is a repository in which one can:
 
 - [`01_SOURCE_OF_TRUTH.md`](01_SOURCE_OF_TRUTH.md) — stable product boundaries and mandatory properties.
 - [`02_ROADMAP.md`](02_ROADMAP.md) — the sequence of stages, goals, and expected results.
-- [`04_CURRENT_STATE.md`](04_CURRENT_STATE.md) — a current snapshot of completed work, open questions, and the next step.
+- [`progress/`](progress/) — chronological checkpoint/handoff records. The most recent filename describes the current repository state, verification results, unresolved items, and the next recommended step.
+- [`architecture/`](architecture/) — architecture that has actually been implemented or accepted.
+- [`decisions/`](decisions/) — accepted architectural decisions and their consequences.
 
 Architecture documentation and ADRs should be created as actual decisions emerge. The currently absent `03_ARCHITECTURE.md` should not be filled with assumptions.
 
 ## Rules for New ChatGPT/Codex Sessions
 
-Before planning or implementation, read this file, `01_SOURCE_OF_TRUTH.md`, and `04_CURRENT_STATE.md`. Also consult `02_ROADMAP.md` when selecting the next task.
+Before planning or implementation, read this file, `01_SOURCE_OF_TRUTH.md`, and the most recent checkpoint in `progress/`. Checkpoint filenames use `YYYY-MM-DD-NNN-slug.md`, so lexicographic order is chronological. Read earlier checkpoints only when historical context is needed. Also consult `02_ROADMAP.md` when selecting the next task.
 
 When working on the project:
 
@@ -107,9 +109,9 @@ When working on the project:
 2. Do not add infrastructure or business features unless they support the goal of the current stage.
 3. Propose a small, verifiable step and state assumptions explicitly.
 4. For a significant choice, propose an ADR with the following sections: context, options, decision, and consequences.
-5. After implementation, update `04_CURRENT_STATE.md` and the status of the corresponding stage.
+5. After a meaningful implementation milestone, create a new checkpoint in `progress/` and update the status of the corresponding stage when it changed. Do not rewrite an existing checkpoint except to correct a factual error.
 6. If a proposal changes the stable product boundaries, discuss the change to `01_SOURCE_OF_TRUTH.md` first.
 
 Example prompt for starting a new session:
 
-> Read `docs/00_PROJECT_CONTEXT.md`, `docs/01_SOURCE_OF_TRUTH.md`, `docs/02_ROADMAP.md`, and `docs/04_CURRENT_STATE.md`. Treat only explicitly recorded decisions as accepted. Help complete the next small step of the current stage, and propose any necessary documentation updates at the end.
+> Read `docs/00_PROJECT_CONTEXT.md`, `docs/01_SOURCE_OF_TRUTH.md`, `docs/02_ROADMAP.md`, and the most recent checkpoint in `docs/progress/`. Treat only explicitly recorded decisions as accepted. Help complete the next small step of the current stage, and create a new checkpoint after a meaningful implementation milestone.

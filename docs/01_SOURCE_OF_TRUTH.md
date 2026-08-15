@@ -129,4 +129,4 @@ The project can be considered to have achieved its primary goal when:
 
 ## Document Change Rule
 
-This file changes only when the product's essence, boundaries, or mandatory properties change. Replacing one technical component with another usually does not require a change to the Source of Truth and should instead be reflected in architecture documentation, ADRs, and `04_CURRENT_STATE.md`.
+This file changes only when the product's essence, boundaries, or mandatory properties change. Replacing one technical component with another usually does not require a change to the Source of Truth and should instead be reflected in architecture documentation, ADRs, and a new checkpoint in `docs/progress/`.

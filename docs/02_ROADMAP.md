@@ -11,7 +11,7 @@ The roadmap defines the sequence of learning and implementation. It is not a pro
 - **Completed** — the expected result of the stage has been achieved and verified.
 - **Deferred** — the stage has been deliberately postponed for a recorded reason.
 
-A status applies to the stage as a whole. Incomplete details should be listed in `04_CURRENT_STATE.md` rather than hidden behind an overall completion percentage.
+A status applies to the stage as a whole. Incomplete details should be recorded in the most recent checkpoint in `docs/progress/` rather than hidden behind an overall completion percentage.
 
 ## Principles for Progressing Through the Stages
 
@@ -28,7 +28,7 @@ A status applies to the stage as a whole. Incomplete details should be listed in
 ### Goals
 
 - Record the project's purpose, boundaries, and principles.
-- Separate stable truth, the roadmap, and mutable current state.
+- Separate stable truth, the roadmap, and chronological progress records.
 - Create a reliable entry point for future ChatGPT/Codex sessions.
 
 ### Learning Objectives
@@ -38,7 +38,7 @@ A status applies to the stage as a whole. Incomplete details should be listed in
 
 ### Expected Result
 
-The repository contains the linked documents `00_PROJECT_CONTEXT.md`, `01_SOURCE_OF_TRUTH.md`, `02_ROADMAP.md`, and `04_CURRENT_STATE.md`. They honestly state that no implementation exists yet and do not present proposed technologies as accepted decisions.
+The repository contains the linked documents `00_PROJECT_CONTEXT.md`, `01_SOURCE_OF_TRUTH.md`, and `02_ROADMAP.md`, plus chronological checkpoint/handoff records in `docs/progress/`. The most recent checkpoint states what actually exists, what was verified, what remains unresolved, and what should happen next without presenting proposed technologies as accepted decisions.
 
 ## Stage 1: Basic Data Ingestion
 
@@ -200,7 +200,7 @@ The demonstration includes the normal flow and several controlled failures that 
 
 After completing a meaningful step:
 
-1. Update the stage status and actual result.
-2. Put the precise implementation snapshot and open questions in `04_CURRENT_STATE.md`.
+1. Update the stage status or expected result only when it actually changed.
+2. Create a new checkpoint in `docs/progress/` with the starting point, changes, resulting state, verification results, decisions, unresolved items, and next recommended step.
 3. Record architectural decisions in ADRs if genuine alternatives and consequences existed.
-4. Do not rewrite past goals as though deviations and experiments never occurred; explain useful changes in direction.
+4. Do not rewrite earlier checkpoints except to correct factual errors; use a new checkpoint to explain useful changes in direction.
