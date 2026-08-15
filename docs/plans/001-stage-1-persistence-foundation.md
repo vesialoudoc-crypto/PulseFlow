@@ -1,14 +1,15 @@
 # PLAN 001: Stage 1 Persistence Foundation
 
 **Document type:** PLAN  
-**Status:** Proposed implementation sequence; not implemented  
+**Status:** Completed on 2026-08-16; verified in the [final progress checkpoint](../progress/2026-08-16-011-persistence-foundation-completed.md)
+
 **ADR status:** This document is not an ADR and does not replace ADR 0001 or ADR 0002.
 
 ## Purpose
 
 Define the smallest persistence-only vertical slice for Stage 1. This slice establishes and verifies the PostgreSQL persistence foundation before HTTP ingestion, NDJSON parsing, validation, or chunk orchestration is implemented.
 
-Nothing in this document describes current source code, an existing database schema, or completed tests. It records the intended implementation scope and order.
+This document records the implementation scope and order that were followed. The resulting repository state and final verification are recorded in the [completion checkpoint](../progress/2026-08-16-011-persistence-foundation-completed.md); this plan does not define architecture or application behavior beyond the completed persistence-foundation slice.
 
 ## Accepted implementation intentions
 
