@@ -46,6 +46,7 @@ Do not interpret roadmap items as already accepted architecture.
 - Discuss meaningful alternatives before making a decision with long-term consequences.
 - Create an ADR when a significant architectural choice is accepted.
 - Keep implementation and documentation consistent.
+- Do not use C# primary constructors. Declare constructors explicitly inside the type body using traditional constructor syntax.
 
 ## Documentation updates
 

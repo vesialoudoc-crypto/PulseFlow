@@ -3,9 +3,13 @@ using PulseFlow.Api.Persistence.Events;
 
 namespace PulseFlow.Api.Persistence;
 
-public sealed class PulseFlowDbContext(DbContextOptions<PulseFlowDbContext> options)
-    : DbContext(options)
+public sealed class PulseFlowDbContext : DbContext
 {
+    public PulseFlowDbContext(DbContextOptions<PulseFlowDbContext> options)
+        : base(options)
+    {
+    }
+
     public DbSet<EventRecord> EventRecords => Set<EventRecord>();
 
     protected override void OnModelCreating(ModelBuilder modelBuilder)
