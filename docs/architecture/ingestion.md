@@ -6,27 +6,42 @@
 
 Each event uses [Event Contract v1](../contracts/event-ingestion-v1.md). Its envelope contains `type`, `source`, `occurredAt`, and an opaque JSON-object `payload`. Batch transport does not change these event-level semantics.
 
-The implemented `EventEnvelope`/validation boundary accepts an already-parsed,
-untrusted `JsonElement`. It returns either an immutable valid `EventEnvelope` or
+The implemented NDJSON reader accepts a `Stream`, frames and parses records
+incrementally, and exposes the ordered outcomes as `IAsyncEnumerable`. A record result
+contains its one-based physical record number and either an independently owned
+untrusted `JsonElement` or a malformed marker. It has no Event Contract, HTTP, or
+persistence responsibility.
+
+The implemented `EventEnvelope`/validation boundary accepts the parsed untrusted
+`JsonElement`. It returns either an immutable valid `EventEnvelope` or
 EventEnvelope-specific coded validation errors. `EventEnvelope` contains non-empty
 `Type` and `Source` strings, a UTC `DateTime` `OccurredAt`, and an opaque object-valued
 `JsonElement` `Payload`. The payload is cloned while the envelope is constructed, so
-it does not borrow the lifetime of the caller's `JsonDocument`.
+it does not borrow the lifetime of the reader result.
 
-Only this boundary is implemented. NDJSON reading, JSON syntax result handling, later
-ingestion orchestration, chunk formation, application persistence wiring, and the HTTP
-endpoint remain unimplemented.
+Later ingestion orchestration, chunk formation, application persistence wiring, and
+the HTTP endpoint remain unimplemented.
 
 ## Batch transport
 
 Batch ingestion uses NDJSON with one independent Event Contract v1 record per line. A completely received record is a separate unit of ingestion:
 
+- LF and CRLF terminate records;
+- a blank line is an empty malformed record rather than ignored input;
+- a syntactically complete final JSON value at clean end-of-stream is a record even
+  without a trailing newline;
+- incomplete or malformed final JSON is a malformed record and is not repaired;
+- records are numbered from one in physical stream order;
+- cancellation propagates through normal .NET cancellation semantics and is not
+  classified as malformed input;
 - valid records may be accepted independently of other records in the upload;
 - one malformed record does not automatically reject other valid records;
 - if the upload is interrupted during the last record, earlier completely received records remain eligible for processing;
 - incomplete or malformed records are not repaired heuristically.
 
-The rationale and consequences are recorded in [ADR 0001](../decisions/0001-use-ndjson-for-batch-ingestion.md).
+The transport choice and exact framing rules are recorded in
+[ADR 0001](../decisions/0001-use-ndjson-for-batch-ingestion.md) and
+[ADR 0004](../decisions/0004-define-ndjson-record-framing.md).
 
 ## Validation and persistence
 
@@ -52,9 +67,13 @@ PostgreSQL transaction
 commit = accepted
 ```
 
-The server reads the NDJSON stream sequentially. Each completely received record is
-parsed once into an untrusted JSON representation. JSON parsing determines syntax
-validity. Separate contract validation inspects the already-parsed representation and
+The NDJSON reader reads the stream sequentially with a fixed-size I/O buffer and a
+buffer for only the current record. Each completed record is parsed once into an
+independently owned untrusted `JsonElement`; JSON parsing determines only syntax
+validity. A malformed record is yielded as a simple record-level outcome, and later
+records remain readable when the stream itself remains readable.
+
+Separate contract validation inspects the already-parsed representation and
 determines whether it satisfies Event Contract v1: `type`, `source`, `occurredAt`, and
 the requirement that `payload` is a JSON object. It does not serialize and parse the
 record again. Only successful contract validation constructs `EventEnvelope`; the

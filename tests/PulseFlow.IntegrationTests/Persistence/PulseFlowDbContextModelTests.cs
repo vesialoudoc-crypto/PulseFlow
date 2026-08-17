@@ -128,6 +128,8 @@ public sealed class PulseFlowDbContextModelTests
         Assert.False(isNullable);
     }
 
+    #region Test helpers
+
     private static PulseFlowDbContext CreateDbContext()
     {
         var options = new DbContextOptionsBuilder<PulseFlowDbContext>()
@@ -136,4 +138,6 @@ public sealed class PulseFlowDbContextModelTests
 
         return new PulseFlowDbContext(options);
     }
+
+    #endregion
 }

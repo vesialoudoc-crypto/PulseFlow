@@ -2,9 +2,11 @@
 
 **Document type:** PLAN
 
-**Status:** In progress; Step 1 implemented and verified
+**Status:** In progress; Steps 1 and 2 implemented and verified
 
 **ADR status:** This document is not an ADR. It sequences implementation of the design accepted in [ADR 0001](../decisions/0001-use-ndjson-for-batch-ingestion.md), [ADR 0002](../decisions/0002-use-chunked-postgresql-persistence-for-ingestion.md), and [ADR 0003](../decisions/0003-construct-event-envelope-after-contract-validation.md); it does not replace those decisions or describe a fully implemented pipeline.
+Exact stream framing for Step 2 is accepted in
+[ADR 0004](../decisions/0004-define-ndjson-record-framing.md).
 
 ## Purpose
 
@@ -32,9 +34,9 @@ EventEnvelope
 later ingestion orchestration
 ```
 
-The complete flow above remains a target sequence. Implementing the
-`EventEnvelope`/validation boundary in Step 1 does not implement NDJSON reading, JSON
-syntax parsing, orchestration, chunking, persistence wiring, or an HTTP endpoint.
+The complete flow above remains a target sequence. Steps 1 and 2 implement the
+`EventEnvelope`/validation boundary and the NDJSON reader/JSON syntax boundary.
+Orchestration, chunking, persistence wiring, and an HTTP endpoint remain unimplemented.
 
 ## Planning constraints
 
@@ -104,6 +106,9 @@ Exact filenames may follow the repository's conventions when implemented. A thir
 
 ### Step 2: Add the asynchronous NDJSON record reader and parser tests
 
+**Implementation status:** Completed on 2026-08-17. See the
+[Step 2 checkpoint](../progress/2026-08-17-013-ndjson-record-reader.md).
+
 #### Responsibility introduced
 
 Read the supplied stream incrementally, establish NDJSON record boundaries, and parse
@@ -119,12 +124,18 @@ yielded result should preserve record order and enough location information, suc
 one-based record number, for later accounting and diagnosis without embedding an HTTP
 response model.
 
-Before implementation, define and test the minimal framing behavior needed by the reader: LF and CRLF handling, blank-line treatment, and whether a syntactically complete final JSON object at a clean end-of-stream is a complete record without a trailing newline. These are transport edge cases required by this step, not reasons to choose upload limits or repair malformed JSON. An incomplete or malformed final record must never be repaired heuristically.
+[ADR 0004](../decisions/0004-define-ndjson-record-framing.md) defines the framing
+behavior implemented here: LF and CRLF terminate records, blank lines are malformed
+empty records, and a syntactically complete final JSON value is accepted at clean
+end-of-stream without a trailing newline. Incomplete or malformed final JSON is
+reported as malformed and is never repaired heuristically. Record numbers are
+one-based in physical stream order, while cancellation propagates rather than becoming
+a malformed-record result.
 
 #### Conceptual files and types
 
 - `src/PulseFlow.Api/Ingestion/Ndjson/NdjsonRecordReader.cs`
-- a per-record read result that distinguishes a parsed envelope from a malformed record
+- a per-record read result that distinguishes parsed untrusted JSON from a malformed record
 - focused parser or serializer support colocated with the NDJSON responsibility if separation makes the tests clearer
 - `tests/PulseFlow.UnitTests/Ingestion/Ndjson/NdjsonRecordReaderTests.cs`
 
@@ -350,7 +361,7 @@ The following remain unresolved until a later implementation step demonstrably r
 - **Compression:** no compressed request format is selected.
 - **Production migration execution strategy:** committed migrations remain the schema artifact; how production applies them is separate from application `DbContext` registration and test setup.
 
-Other implementation choices remain just-in-time decision gates at the step where they first become unavoidable: Step 2 framing edge cases and unknown-property parsing behavior, Step 3 identifier and receipt-time assignment, Step 4 application-level persistence-failure propagation, and Step 5 the remaining public HTTP contract. None requires a new assembly or a generic persistence abstraction.
+Other implementation choices remain just-in-time decision gates at the step where they first become unavoidable: Step 3 identifier and receipt-time assignment, Step 4 application-level persistence-failure propagation, and Step 5 the remaining public HTTP contract. Unknown top-level Event Contract property behavior also remains unresolved. None requires a new assembly or a generic persistence abstraction.
 
 ## Completion criteria
 

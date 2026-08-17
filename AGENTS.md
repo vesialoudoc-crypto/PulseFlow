@@ -48,6 +48,22 @@ Do not interpret roadmap items as already accepted architecture.
 - Keep implementation and documentation consistent.
 - Do not use C# primary constructors. Declare constructors explicitly inside the type body using traditional constructor syntax.
 
+## Testing
+
+- Every test uses explicit `// Arrange`, `// Act`, `// Assert`.
+- Test names follow `Method_Scenario_ExpectedResult`.
+- One test verifies one logical behavior or scenario.
+- Avoid Eager Test: do not test several unrelated behaviors in one test.
+- Avoid Assertion Roulette: assertions in one test must belong to the same logical result.
+- Multiple assertions are allowed when they collectively verify one logical result.
+- Do not split one logical result into several nearly identical tests merely to achieve one assertion per test.
+- Prefer `[Theory]` when several inputs exercise the same behavior.
+- Avoid duplicated Arrange/Act code across many nearly identical tests.
+- Prefer readable, sufficient tests over exhaustive permutation or coverage-driven test suites.
+- Test helpers should make tests easier to read, not hide test intent.
+- Group non-test methods in test classes inside a `#region Test helpers` block to separate them from test methods.
+- Do not refactor unrelated existing tests unless the task explicitly requires it.
+
 ## Documentation updates
 
 - Write all project documentation in English.

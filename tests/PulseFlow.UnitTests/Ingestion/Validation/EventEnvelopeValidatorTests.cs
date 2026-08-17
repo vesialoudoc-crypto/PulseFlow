@@ -443,6 +443,8 @@ public sealed class EventEnvelopeValidatorTests
         Assert.Equal(expectedErrors, GetErrors(result));
     }
 
+    #region Test helpers
+
     private static JsonElement CreateRecord(
         JsonElement? type = null,
         JsonElement? source = null,
@@ -498,4 +500,6 @@ public sealed class EventEnvelopeValidatorTests
             .Select(error => (error.Code, error.JsonPath))
             .ToArray();
     }
+
+    #endregion
 }

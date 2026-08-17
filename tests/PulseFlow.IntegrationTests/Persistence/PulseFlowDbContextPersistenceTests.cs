@@ -98,6 +98,8 @@ public sealed class PulseFlowDbContextPersistenceTests : IClassFixture<PostgreSq
         Assert.Equal("2026-08-16T09:10:12.0000000Z", actualReceivedAt);
     }
 
+    #region Test helpers
+
     private async Task<EventRecord> SaveAndReadAsync(EventRecord eventRecord)
     {
         await using (var writeContext = CreateDbContext())
@@ -148,4 +150,6 @@ public sealed class PulseFlowDbContextPersistenceTests : IClassFixture<PostgreSq
             })
         };
     }
+
+    #endregion
 }
