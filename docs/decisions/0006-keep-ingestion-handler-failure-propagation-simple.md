@@ -35,14 +35,14 @@ possibility that earlier chunks committed before failure.
 ## Decision
 
 On normal completion, `IngestEventsHandler` returns a small non-HTTP
-`IngestEventsResult` containing only:
+`IngestEventsResult` with this accounting invariant:
 
-- `Accepted`: records whose chunk store call completed successfully;
-- `Rejected`: input records excluded before persistence because they were malformed
-  JSON or failed Event Contract v1 validation.
+- `Total` is every input record processed on normal completion;
+- `Accepted` is the records whose chunk store calls completed successfully;
+- `Rejected` is derived as `Total - Accepted` rather than maintained separately.
 
-Malformed and contract-invalid records share the one rejected total. Separate
-counters are not introduced yet.
+Malformed and contract-invalid records are therefore included in the one derived
+rejected total. Separate rejection-category counters are not introduced yet.
 
 If `IEventChunkStore.StoreAsync` throws, the handler does not convert the exception
 into a result and does not wrap it in a custom ingestion exception. The persistence
@@ -59,8 +59,9 @@ This decision does not select HTTP status or response behavior.
 ## Consequences
 
 The normal result and handler control flow remain small and contain no HTTP or
-persistence-specific failure model. Rejected always means invalid input excluded
-before persistence; it never includes a valid record from a failed store call.
+persistence-specific failure model. Because persistence failure returns no result,
+valid-but-uncommitted records are never misclassified as rejected by the derived
+`Total - Accepted` formula.
 
 On persistence failure, partial accepted/rejected counters are not available as a
 handler result. Earlier commits are still observable in persistence, and retrying an

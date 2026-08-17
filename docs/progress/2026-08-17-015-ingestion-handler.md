@@ -18,7 +18,7 @@ though earlier chunks may already be durable.
 ## What changed
 
 - Added [ADR 0006](../decisions/0006-keep-ingestion-handler-failure-propagation-simple.md),
-  accepting an `Accepted`/`Rejected` normal-completion result and unchanged
+  accepting a small normal-completion accounting result and unchanged
   persistence-exception propagation without a partial result or custom exception.
 - Added `IngestEventsHandler` with this constructor and public method:
 
@@ -35,23 +35,25 @@ though earlier chunks may already be durable.
 
 - Required `chunkCapacity > 0` at construction and rejected non-positive values with
   `ArgumentOutOfRangeException`.
-- Added the non-HTTP result model with exactly two public get-only properties:
+- Added the non-HTTP result model with two stored values and one derived public
+  property:
 
   ```csharp
   public sealed class IngestEventsResult
   {
+      public int Total { get; }
       public int Accepted { get; }
-      public int Rejected { get; }
+      public int Rejected => Total - Accepted;
   }
   ```
 
-- Added sequential validation and bounded chunk formation. Malformed and
-  contract-invalid records increment one rejected total. Valid envelopes are stored
+- Added sequential validation and bounded chunk formation. Total advances for every
+  processed record; malformed and contract-invalid records enter no chunk. Valid envelopes are stored
   in ordered full chunks, followed by one non-empty final partial chunk. Accepted is
   incremented only after each store call completes successfully.
 - Added focused handler unit tests with a recording fake `IEventChunkStore`. They
   cover mixed malformed/contract-invalid/valid input, ordered chunks at capacities
-  two and three, final partial flush, accepted/rejected totals, later store failure,
+  two and three, final partial flush, total/accepted/derived-rejected accounting, later store failure,
   processing stop, unchanged exception propagation, earlier successful chunks, and
   invalid capacities.
 - Updated PLAN 002, the ingestion architecture, and the Stage 1 roadmap clarification
@@ -79,7 +81,9 @@ EF Core, `PulseFlowDbContext`, options, configuration binding, or a generic resu
 framework. It retains only the current record, current chunk, and counters rather
 than materializing the complete input sequence.
 
-On a successful store call, the complete supplied chunk is counted as accepted. If a
+On normal completion, `Total` is all processed input records, `Accepted` is all
+records in successfully stored chunks, and `Rejected` is derived as
+`Total - Accepted`. On a successful store call, the complete supplied chunk is counted as accepted. If a
 later call throws, accepted accounting is not advanced for that failing chunk, the
 same exception propagates, enumeration stops, and no `IngestEventsResult` is returned.
 Earlier successful chunks remain durable. This is intentionally a partially committed
@@ -108,7 +112,7 @@ Results:
 ## Decisions made
 
 - Accepted [ADR 0006](../decisions/0006-keep-ingestion-handler-failure-propagation-simple.md).
-  Normal completion has only accepted and rejected totals. Persistence failures and
+  Normal completion has total, accepted, and derived rejected accounting. Persistence failures and
   cancellation propagate without a result; earlier committed chunks remain durable.
 - No additional architectural decision became unavoidable. In particular, this step
   introduced no options class, configuration binding, chunk-size value object,

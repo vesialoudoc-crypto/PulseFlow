@@ -23,8 +23,9 @@ The implemented Step 3 persistence boundary accepts one already-formed collectio
 valid `EventEnvelope` values. Its EF Core implementation translates them directly to
 the separate `EventRecord` representation and persists them through the existing
 `PulseFlowDbContext`. The implemented Step 4 handler validates parsed records, forms
-and stores ordered chunks, and returns normal-completion accounting. Application
-database wiring and the HTTP endpoint remain unimplemented.
+and stores ordered chunks, and returns normal-completion accounting. The implemented
+Step 5 controller and application composition expose this flow over HTTP and wire it
+to PostgreSQL. End-to-end HTTP-to-PostgreSQL verification remains for Step 6.
 
 ## Batch transport
 
@@ -100,24 +101,30 @@ Therefore:
 - a failure in a later chunk does not roll back earlier committed chunks;
 - a database failure can leave all records in the current chunk unaccepted even though they passed record validation.
 
-The chunk size is operational configuration, not part of the public ingestion contract. No concrete value is accepted; it must be tuned later using load measurements.
+The chunk size is operational configuration, not part of the public ingestion
+contract. `IngestionOptions` binds `Ingestion:ChunkCapacity` and validates a positive
+value when the application starts. The current value of 100 is a temporary initial
+operational value, not a tuned performance conclusion; later load measurements must
+inform tuning.
 
 `IngestEventsHandler` receives `EventEnvelopeValidator`, `IEventChunkStore`, and a
 positive integer chunk capacity directly through its constructor. It consumes
 `IAsyncEnumerable<NdjsonRecordResult>` and retains only the current record, current
-chunk, and accepted/rejected counters. Malformed and contract-invalid records both
-increment `Rejected`; they do not enter a chunk. Each full chunk and the final
-non-empty partial chunk are stored in input order. `Accepted` advances only after the
-corresponding store call completes successfully.
+chunk, `Total`, and `Accepted`. `Total` advances for every processed input record.
+Malformed and contract-invalid records do not enter a chunk. Each full chunk and the
+final non-empty partial chunk are stored in input order, and `Accepted` advances only
+after the corresponding store call completes successfully.
 
-On normal completion the handler returns `IngestEventsResult` containing only
-`Accepted` and `Rejected`. If a store call throws, the exception propagates unchanged,
-processing stops, and no result is returned. Earlier successfully stored chunks remain
-durable, while the failing chunk is not accepted. This is the deliberate simple
-failure model accepted in
+On normal completion the handler returns `IngestEventsResult` with `Total`,
+`Accepted`, and `Rejected`, where `Rejected` is derived as `Total - Accepted` rather
+than separately maintained. If a store call throws, the exception propagates
+unchanged, processing stops, and no result is returned. Earlier successfully stored
+chunks remain durable, while the failing chunk is not accepted. Because there is no
+failure result, valid-but-uncommitted records are not misclassified by the derived
+formula. This is the deliberate simple failure model accepted in
 [ADR 0006](../decisions/0006-keep-ingestion-handler-failure-propagation-simple.md),
-not a claim of request-level atomicity. HTTP behavior and the retry/idempotency problem
-remain unresolved.
+not a claim of request-level atomicity. The retry/idempotency problem remains
+unresolved.
 
 The rationale and consequences are recorded in [ADR 0002](../decisions/0002-use-chunked-postgresql-persistence-for-ingestion.md).
 
@@ -156,19 +163,67 @@ JSON semantics rather than original whitespace or property order. `Id` and
 The generation decision is recorded in
 [ADR 0005](../decisions/0005-generate-event-persistence-metadata-in-application.md).
 
+## HTTP and application composition
+
+The implemented public boundary is `POST /api/events`, exposed by an ASP.NET Core
+controller and restricted to `application/x-ndjson`. `EventsController` passes
+`Request.Body` to `NdjsonRecordReader`, passes the resulting asynchronous sequence to
+`IngestEventsHandler`, supplies request cancellation to both, and returns the handler
+result. It contains no JSON parsing, Event Contract validation, chunk formation,
+database access, persistence exception handling, or persistence logic.
+
+Normal completion returns HTTP 200 with camel-case JSON containing `total`,
+`accepted`, and derived `rejected`. This includes empty input and normally processed
+input for which every record is rejected. Unsupported media types return HTTP 415.
+Persistence or other unhandled failures are handled centrally as HTTP 500 Problem
+Details. The safe response includes `HttpContext.TraceIdentifier` as `traceId` and
+does not expose exception messages, stack traces, SQL details, or partial accounting.
+The exception is logged, and previously committed chunks may remain durable. These
+HTTP decisions are recorded in
+[ADR 0007](../decisions/0007-expose-controller-based-ndjson-ingestion-api.md).
+
+The implemented dependency graph and lifetimes are:
+
+```text
+HTTP
+    ↓
+EventsController
+    ↓
+NdjsonRecordReader (singleton)
+    ↓
+IngestEventsHandler (scoped)
+    ├── EventEnvelopeValidator (singleton)
+    └── IEventChunkStore (scoped)
+            ↓
+        EfCoreEventChunkStore
+            ↓
+        PulseFlowDbContext (scoped)
+            ↓
+        PostgreSQL
+```
+
+`PulseFlowDbContext` uses Npgsql with the required
+`ConnectionStrings:PulseFlow` connection string. Deployments can supply it through
+the `ConnectionStrings__PulseFlow` environment variable; no real credential is stored
+in repository configuration. Application startup does not execute migrations.
+
+`GlobalExceptionHandler` is registered through ASP.NET Core exception-handler
+middleware with Problem Details. Status-code pages provide Problem Details for
+otherwise body-less error statuses. First-party ASP.NET Core OpenAPI generation
+documents the route, streaming NDJSON request body, and 200, 415, and 500 responses.
+Swagger UI points to the generated document in Development only.
+
 ## Not yet defined
 
 - record, upload, and record-count limits;
 - compression;
-- HTTP route, status codes, and response formats, including partial success;
 - authentication and authorization;
 - idempotency, deduplication, and client retry behavior;
 - downstream processing-transfer technology;
-- the concrete chunk size and its configuration source;
-- HTTP behavior when a database failure occurs after one or more chunks have committed;
+- a measured and tuned chunk capacity;
 - retry and idempotency behavior for an overall failure after earlier chunks committed;
 - PostgreSQL retry strategy, EF Core execution strategy, and transaction isolation level;
-- application database DI wiring and production migration execution;
+- production migration execution;
 - the concrete validation library or framework.
 
 RabbitMQ, Redis, polling, and queue or stream technologies are not accepted parts of the architecture at this point.

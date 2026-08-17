@@ -74,12 +74,12 @@ From a clean environment, one can start the application and PostgreSQL, submit a
 - Batch ingestion uses NDJSON framing: each completely received line is an independent Event Contract v1 record. Valid records may be accepted independently; a malformed or truncated record does not invalidate other completely received valid records. See [ADR 0001](decisions/0001-use-ndjson-for-batch-ingestion.md).
 - NDJSON records are read, parsed, and validated sequentially. Valid records are persisted to PostgreSQL in configurable chunks, and a record becomes accepted only when the transaction containing its chunk commits successfully. See [ADR 0002](decisions/0002-use-chunked-postgresql-persistence-for-ingestion.md).
 - The chunk size is operational configuration rather than part of the public contract; its value has not been selected and must later be evaluated through load measurements.
-- On normal completion, ingestion orchestration reports only accepted and rejected totals. A chunk-store failure propagates without a handler result; earlier committed chunks remain durable. The resulting retry/idempotency problem and HTTP failure behavior remain unresolved. See [ADR 0006](decisions/0006-keep-ingestion-handler-failure-propagation-simple.md).
-- Batch limits, compression, and HTTP partial-success semantics have not been accepted.
+- On normal completion, ingestion orchestration reports total and accepted counts with rejected derived as `Total - Accepted`. A chunk-store failure propagates without a handler result; earlier committed chunks remain durable. The resulting retry/idempotency problem remains unresolved. See [ADR 0006](decisions/0006-keep-ingestion-handler-failure-propagation-simple.md).
+- Normal partial-invalid HTTP 200 semantics are accepted in [ADR 0007](decisions/0007-expose-controller-based-ndjson-ingestion-api.md). Batch limits and compression have not been accepted.
 
 ### Do Not Decide in Advance
 
-Do not select a concrete chunk size, RabbitMQ, Redis, polling, a queue or stream technology, delivery guarantees, idempotency semantics, an API query model, batch limits, compression, partial-success HTTP semantics, PostgreSQL retry behavior, transaction isolation level, multiple application instances, the final event schema, or the cloud topology before a separate decision establishes the need and criteria.
+Do not treat the initial chunk capacity as tuned, or select RabbitMQ, Redis, polling, a queue or stream technology, delivery guarantees, idempotency semantics, an API query model, batch limits, compression, PostgreSQL retry behavior, transaction isolation level, multiple application instances, the final event schema, or the cloud topology before a separate decision establishes the need and criteria.
 
 ## Stage 2: Asynchronous Processing
 
@@ -209,6 +209,27 @@ Specific AWS services, the number of environments, network topology, or release 
 ### Expected Result
 
 The demonstration includes the normal flow and several controlled failures that are visible in system signals and can be investigated using the runbook. Automated checks, documentation, and the final README allow another developer to evaluate the system, reproduce key scenarios, and understand its limitations.
+
+## Deferred Portfolio and Production Coverage
+
+The following are intentional future learning and portfolio concerns, not rejected
+requirements and not claims about the currently implemented architecture:
+
+- liveness and readiness health checks;
+- structured logging and correlation IDs;
+- metrics, distributed tracing, and broader observability;
+- authentication and authorization;
+- rate limiting and request/input limits;
+- resilience and retry policies where concrete failure behavior justifies them;
+- idempotency and deduplication;
+- caching or Redis only when a concrete read/query use case justifies caching;
+- asynchronous/background processing and messaging when Stage 2 requires them;
+- load testing and multi-instance behavior;
+- graceful shutdown and operational behavior;
+- CI/CD, AWS deployment, and production configuration and secrets.
+
+Specific technologies and guarantees remain just-in-time decisions for the stages
+that establish their requirements and verification criteria.
 
 ## Updating the Roadmap
 

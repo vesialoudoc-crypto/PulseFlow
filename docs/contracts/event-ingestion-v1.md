@@ -1,11 +1,11 @@
 # Event Ingestion Contract v1
 
 **Status:** Accepted for implementation  
-**Implemented:** No
+**Implemented:** HTTP boundary implemented; end-to-end PostgreSQL verification pending
 
 ## Purpose
 
-This document defines the human-readable semantics of the first event envelope accepted for PulseFlow ingestion. It fixes the event fields and the boundary of `payload`; it does not claim that an ingestion endpoint currently exists.
+This document defines the human-readable semantics of the first event envelope accepted for PulseFlow ingestion. It fixes the event fields and the boundary of `payload`, and documents the implemented HTTP ingestion boundary.
 
 When the endpoint is implemented, the ASP.NET Core OpenAPI document must describe the HTTP surface that the running API actually accepts. This document answers what PulseFlow promises clients; OpenAPI will answer what the current implementation exposes. A mismatch between them is a contract defect.
 
@@ -80,13 +80,40 @@ The following top-level payload values are invalid:
 
 These fragments illustrate only the invalid `payload` shape; they are not complete requests.
 
+## HTTP ingestion contract
+
+- Method and route: `POST /api/events`.
+- Request media type: `application/x-ndjson`.
+- Each NDJSON record contains one Event Contract v1 JSON value and is processed
+  independently according to the accepted framing rules.
+- Normal completion returns HTTP 200 with:
+
+  ```json
+  {
+    "total": 3,
+    "accepted": 2,
+    "rejected": 1
+  }
+  ```
+
+  `total` is every input record processed, `accepted` is every record whose chunk
+  committed successfully, and `rejected` is derived as `total - accepted`.
+- Malformed or contract-invalid individual records contribute to `rejected` and do
+  not fail an otherwise normally completed request. Zero accepted records with one or
+  more rejected records is still HTTP 200. Empty input returns HTTP 200 with all
+  counts zero.
+- An unsupported request media type returns HTTP 415 Problem Details.
+- Persistence and other unhandled failures return HTTP 500 Problem Details without
+  exception messages, stack traces, SQL details, or partial accounting. Earlier
+  chunks may remain committed after a later failure.
+
+The controller-based boundary and failure semantics are recorded in
+[ADR 0007](../decisions/0007-expose-controller-based-ndjson-ingestion-api.md).
+
 ## Not defined by this decision
 
-The following HTTP contract details remain unresolved and must not be inferred from this document:
+The following contract details remain unresolved and must not be inferred from this document:
 
-- the HTTP method and endpoint path;
-- whether v1 accepts one event, a batch, or both;
-- success and error response bodies and status codes;
 - identifier generation and idempotency behavior;
 - maximum lengths, payload size, and nesting limits;
 - treatment of unknown properties outside `payload`;
