@@ -1,13 +1,18 @@
 # Event Ingestion Contract v1
 
-**Status:** Accepted for implementation  
-**Implemented:** HTTP boundary implemented; end-to-end PostgreSQL verification pending
+**Status:** Accepted and implemented
+**Implementation:** `POST /api/events` with `application/x-ndjson`, normal
+accounting, and independent malformed/contract-invalid record rejection is
+implemented. End-to-end persistence is verified against real PostgreSQL.
 
 ## Purpose
 
 This document defines the human-readable semantics of the first event envelope accepted for PulseFlow ingestion. It fixes the event fields and the boundary of `payload`, and documents the implemented HTTP ingestion boundary.
 
-When the endpoint is implemented, the ASP.NET Core OpenAPI document must describe the HTTP surface that the running API actually accepts. This document answers what PulseFlow promises clients; OpenAPI will answer what the current implementation exposes. A mismatch between them is a contract defect.
+The ASP.NET Core OpenAPI document describes the HTTP surface that the running API
+actually accepts. This document answers what PulseFlow promises clients; OpenAPI
+answers what the current implementation exposes. A mismatch between them is a
+contract defect.
 
 ## Event envelope
 

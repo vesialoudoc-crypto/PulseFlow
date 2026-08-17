@@ -42,7 +42,7 @@ The repository contains the linked documents `00_PROJECT_CONTEXT.md`, `01_SOURCE
 
 ## Stage 1: Basic Data Ingestion
 
-**Status:** In progress
+**Status:** Completed
 
 ### Goals
 
@@ -73,7 +73,7 @@ From a clean environment, one can start the application and PostgreSQL, submit a
 - The mechanism that transfers persisted events to later processing has not been defined.
 - Batch ingestion uses NDJSON framing: each completely received line is an independent Event Contract v1 record. Valid records may be accepted independently; a malformed or truncated record does not invalidate other completely received valid records. See [ADR 0001](decisions/0001-use-ndjson-for-batch-ingestion.md).
 - NDJSON records are read, parsed, and validated sequentially. Valid records are persisted to PostgreSQL in configurable chunks, and a record becomes accepted only when the transaction containing its chunk commits successfully. See [ADR 0002](decisions/0002-use-chunked-postgresql-persistence-for-ingestion.md).
-- The chunk size is operational configuration rather than part of the public contract; its value has not been selected and must later be evaluated through load measurements.
+- The chunk size is operational configuration rather than part of the public contract. The implemented initial value is 100, is configurable and validated, and is not a tuned performance conclusion; later load measurements may change it.
 - On normal completion, ingestion orchestration reports total and accepted counts with rejected derived as `Total - Accepted`. A chunk-store failure propagates without a handler result; earlier committed chunks remain durable. The resulting retry/idempotency problem remains unresolved. See [ADR 0006](decisions/0006-keep-ingestion-handler-failure-propagation-simple.md).
 - Normal partial-invalid HTTP 200 semantics are accepted in [ADR 0007](decisions/0007-expose-controller-based-ndjson-ingestion-api.md). Batch limits and compression have not been accepted.
 

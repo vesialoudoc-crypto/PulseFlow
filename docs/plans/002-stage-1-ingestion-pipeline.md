@@ -2,8 +2,7 @@
 
 **Document type:** PLAN
 
-**Status:** In progress; Steps 1 through 6 implemented and verified; Step 7 final
-review and completion checkpoint remain
+**Status:** Completed on 2026-08-18
 
 **ADR status:** This document is not an ADR. It sequences implementation of the design accepted in [ADR 0001](../decisions/0001-use-ndjson-for-batch-ingestion.md), [ADR 0002](../decisions/0002-use-chunked-postgresql-persistence-for-ingestion.md), and [ADR 0003](../decisions/0003-construct-event-envelope-after-contract-validation.md); it does not replace those decisions or describe a fully implemented pipeline.
 Exact stream framing for Step 2 is accepted in
@@ -350,6 +349,11 @@ The representative scenarios should include:
 - Do not start load testing or horizontal-scaling work assigned to later roadmap stages.
 
 ### Step 7: Perform the final review and create the completion checkpoint
+
+**Implementation status:** Completed on 2026-08-18. The final review confirmed the
+implemented Stage 1 vertical slice against the accepted contract and ADRs, reconciled
+the active documentation, and recorded the completion checkpoint. No implementation
+defect or new architectural decision was found.
 
 #### Responsibility introduced
 

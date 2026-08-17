@@ -1,6 +1,6 @@
 # Ingestion Architecture
 
-**Status:** Accepted design; partially implemented
+**Status:** Implemented Stage 1 architecture
 
 ## Event record
 
@@ -19,13 +19,15 @@ EventEnvelope-specific coded validation errors. `EventEnvelope` contains non-emp
 `JsonElement` `Payload`. The payload is cloned while the envelope is constructed, so
 it does not borrow the lifetime of the reader result.
 
-The implemented Step 3 persistence boundary accepts one already-formed collection of
-valid `EventEnvelope` values. Its EF Core implementation translates them directly to
-the separate `EventRecord` representation and persists them through the existing
-`PulseFlowDbContext`. The implemented Step 4 handler validates parsed records, forms
-and stores ordered chunks, and returns normal-completion accounting. The implemented
-Step 5 controller and application composition expose this flow over HTTP and wire it
-to PostgreSQL. End-to-end HTTP-to-PostgreSQL verification remains for Step 6.
+The implemented persistence boundary accepts one already-formed collection of valid
+`EventEnvelope` values. Its EF Core implementation translates them directly to the
+separate `EventRecord` representation and persists them through the existing
+`PulseFlowDbContext`. The handler validates parsed records, forms and stores ordered
+chunks, and returns normal-completion accounting. The controller and application
+composition expose this flow over HTTP and wire it to PostgreSQL. Step 6 verifies the
+real hosted HTTP-to-PostgreSQL path, including normal accounting, independent
+malformed/contract-invalid records, full plus final partial chunks, and a later
+persistence failure after an earlier real PostgreSQL commit.
 
 ## Batch transport
 
