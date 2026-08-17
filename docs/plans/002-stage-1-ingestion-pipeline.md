@@ -2,7 +2,8 @@
 
 **Document type:** PLAN
 
-**Status:** In progress; Steps 1 through 5 implemented and verified
+**Status:** In progress; Steps 1 through 5 implemented and verified, with the
+focused Step 6 end-to-end test foundation in progress
 
 **ADR status:** This document is not an ADR. It sequences implementation of the design accepted in [ADR 0001](../decisions/0001-use-ndjson-for-batch-ingestion.md), [ADR 0002](../decisions/0002-use-chunked-postgresql-persistence-for-ingestion.md), and [ADR 0003](../decisions/0003-construct-event-envelope-after-contract-validation.md); it does not replace those decisions or describe a fully implemented pipeline.
 Exact stream framing for Step 2 is accepted in
@@ -297,6 +298,10 @@ Application startup must not silently establish a production migration execution
 - Do not claim end-to-end PostgreSQL behavior until Step 6 passes.
 
 ### Step 6: Add end-to-end integration tests against real PostgreSQL
+
+**Implementation status:** In progress. The reusable per-test HTTP and PostgreSQL
+setup, successful-response accounting scenario, and one committed-row scenario are
+implemented and verified. The remaining Step 6 scenarios are intentionally pending.
 
 #### Responsibility introduced
 
