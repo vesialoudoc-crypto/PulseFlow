@@ -1,10 +1,21 @@
 # Ingestion Architecture
 
-**Status:** Accepted design; not implemented
+**Status:** Accepted design; partially implemented
 
 ## Event record
 
 Each event uses [Event Contract v1](../contracts/event-ingestion-v1.md). Its envelope contains `type`, `source`, `occurredAt`, and an opaque JSON-object `payload`. Batch transport does not change these event-level semantics.
+
+The implemented `EventEnvelope`/validation boundary accepts an already-parsed,
+untrusted `JsonElement`. It returns either an immutable valid `EventEnvelope` or
+EventEnvelope-specific coded validation errors. `EventEnvelope` contains non-empty
+`Type` and `Source` strings, a UTC `DateTime` `OccurredAt`, and an opaque object-valued
+`JsonElement` `Payload`. The payload is cloned while the envelope is constructed, so
+it does not borrow the lifetime of the caller's `JsonDocument`.
+
+Only this boundary is implemented. NDJSON reading, JSON syntax result handling, later
+ingestion orchestration, chunk formation, application persistence wiring, and the HTTP
+endpoint remain unimplemented.
 
 ## Batch transport
 
@@ -24,9 +35,15 @@ The accepted Stage 1 ingestion pipeline is:
 ```text
 NDJSON stream
     ↓
-record parse
+NDJSON record
     ↓
-record validation
+JSON syntax parsing
+    ↓
+untrusted parsed JSON record
+    ↓
+Event Contract v1 validation
+    ↓
+EventEnvelope
     ↓
 configurable in-memory chunk
     ↓
@@ -35,7 +52,14 @@ PostgreSQL transaction
 commit = accepted
 ```
 
-The server reads the NDJSON stream sequentially. Each completely received record is parsed and validated independently against the Event Contract v1 envelope: `type`, `source`, `occurredAt`, and the requirement that `payload` is a JSON object. The opaque contents of `payload` are not interpreted.
+The server reads the NDJSON stream sequentially. Each completely received record is
+parsed once into an untrusted JSON representation. JSON parsing determines syntax
+validity. Separate contract validation inspects the already-parsed representation and
+determines whether it satisfies Event Contract v1: `type`, `source`, `occurredAt`, and
+the requirement that `payload` is a JSON object. It does not serialize and parse the
+record again. Only successful contract validation constructs `EventEnvelope`; the
+opaque contents of `payload` are not interpreted. The rationale and consequences are
+recorded in [ADR 0003](../decisions/0003-construct-event-envelope-after-contract-validation.md).
 
 Malformed or invalid records are excluded from persistence chunks. Request-level validation does not turn one invalid record into rejection of the complete upload. PostgreSQL constraints provide an additional integrity and backstop layer, but they do not replace validation at the ingestion boundary. No validation library or framework has been selected.
 

@@ -13,12 +13,15 @@ public sealed class PostgreSqlInfrastructureTests : IClassFixture<PostgreSqlFixt
     }
 
     [Fact]
-    public async Task Container_accepts_a_database_connection()
+    public async Task OpenAsync_PostgreSqlContainerIsRunning_SetsConnectionStateToOpen()
     {
+        // Arrange
         await using var connection = new NpgsqlConnection(_fixture.ConnectionString);
 
+        // Act
         await connection.OpenAsync();
 
+        // Assert
         Assert.Equal(ConnectionState.Open, connection.State);
     }
 }

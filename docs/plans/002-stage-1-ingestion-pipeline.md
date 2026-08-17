@@ -2,9 +2,9 @@
 
 **Document type:** PLAN
 
-**Status:** Proposed; not implemented
+**Status:** In progress; Step 1 implemented and verified
 
-**ADR status:** This document is not an ADR. It sequences implementation of the design accepted in [ADR 0001](../decisions/0001-use-ndjson-for-batch-ingestion.md) and [ADR 0002](../decisions/0002-use-chunked-postgresql-persistence-for-ingestion.md); it does not replace either decision or describe an implemented pipeline.
+**ADR status:** This document is not an ADR. It sequences implementation of the design accepted in [ADR 0001](../decisions/0001-use-ndjson-for-batch-ingestion.md), [ADR 0002](../decisions/0002-use-chunked-postgresql-persistence-for-ingestion.md), and [ADR 0003](../decisions/0003-construct-event-envelope-after-contract-validation.md); it does not replace those decisions or describe a fully implemented pipeline.
 
 ## Purpose
 
@@ -19,18 +19,22 @@ HTTP request stream
     ↓
 NDJSON record reader
     ↓
+NDJSON record
+    ↓
+JSON syntax parsing
+    ↓
+untrusted parsed JSON record
+    ↓
+Event Contract v1 validation
+    ↓
 EventEnvelope
     ↓
-record validation
-    ↓
-IngestEventsHandler
-    ↓
-configurable chunk formation
-    ↓
-IEventChunkStore
-    ↓
-EF Core / PostgreSQL
+later ingestion orchestration
 ```
+
+The complete flow above remains a target sequence. Implementing the
+`EventEnvelope`/validation boundary in Step 1 does not implement NDJSON reading, JSON
+syntax parsing, orchestration, chunking, persistence wiring, or an HTTP endpoint.
 
 ## Planning constraints
 
@@ -51,9 +55,13 @@ Each step is intentionally bounded. Its explicit non-goals are part of the step 
 
 ### Step 1: Add `EventEnvelope` and focused record validation
 
+**Implementation status:** Completed on 2026-08-16. See the
+[Step 1 checkpoint](../progress/2026-08-16-012-event-envelope-validation-boundary.md).
+
 #### Responsibility introduced
 
-Represent one parsed Event Contract v1 record in memory and validate only the accepted record-level rules:
+Inspect one already-parsed, untrusted JSON value and validate only the accepted
+record-level rules. Construct `EventEnvelope` only after every rule succeeds:
 
 - `type` is present, is a string, and is non-empty;
 - `source` is present, is a string, and is non-empty;
@@ -61,7 +69,12 @@ Represent one parsed Event Contract v1 record in memory and validate only the ac
 - `payload` is present and its top-level JSON value is an object;
 - the internal contents of `payload` remain opaque.
 
-The representation must retain enough information for validation to distinguish missing properties, JSON `null`, incorrect JSON types, and a timestamp that is not expressed with the required UTC `Z` form. It must also own any retained JSON data rather than borrowing it from a disposed parser document.
+The untrusted parsed representation must retain enough information for validation to
+distinguish missing properties, JSON `null`, incorrect JSON types, and a timestamp that
+is not expressed with the required UTC `Z` form. The validator accepts that already
+parsed representation and must not serialize and parse it again. A successfully
+constructed `EventEnvelope` must own any retained JSON data rather than borrowing it
+from a parser document that the caller can dispose.
 
 #### Conceptual files and types
 
@@ -75,6 +88,7 @@ Exact filenames may follow the repository's conventions when implemented. A thir
 #### What this step proves
 
 - The ingestion contract has a representation that is distinct from `EventRecord`.
+- `EventEnvelope` exists only for a record that has passed Event Contract v1 validation.
 - Each rule already accepted by [Event Contract v1](../contracts/event-ingestion-v1.md) has focused positive and negative tests.
 - Arbitrary nested object payloads are accepted without sender-specific payload models or interpretation.
 - Validation results are usable by later orchestration without depending on ASP.NET Core HTTP response types or EF Core.
@@ -82,7 +96,7 @@ Exact filenames may follow the repository's conventions when implemented. A thir
 #### Explicit non-goals
 
 - Do not read a request stream or split NDJSON records.
-- Do not parse multiple records or recover after malformed JSON.
+- Do not parse JSON text, parse multiple records, or recover after malformed JSON.
 - Do not create `IEventChunkStore`, map to `EventRecord`, or access PostgreSQL.
 - Do not create `IngestEventsHandler`, form chunks, or define accepted/rejected batch totals.
 - Do not add an endpoint, application DI registration, options binding, or OpenAPI changes.
@@ -92,9 +106,18 @@ Exact filenames may follow the repository's conventions when implemented. A thir
 
 #### Responsibility introduced
 
-Read the supplied stream incrementally, establish NDJSON record boundaries, parse each completely received record into an `EventEnvelope`, and yield a record result asynchronously. A parse failure must be represented as a result for that record so iteration can continue with later independent records when the stream remains readable.
+Read the supplied stream incrementally, establish NDJSON record boundaries, and parse
+each completely received record once into an untrusted JSON representation. Yield a
+record result asynchronously. A syntax parse failure must be represented as a result
+for that record so iteration can continue with later independent records when the
+stream remains readable. Contract validation of a successfully parsed representation
+constructs `EventEnvelope` at the boundary established by Step 1.
 
-The reader owns framing and JSON syntax concerns. It does not decide contract validity beyond the minimum work necessary to construct an envelope, does not persist records, and does not accumulate the complete upload. Its yielded result should preserve record order and enough location information, such as a one-based record number, for later accounting and diagnosis without embedding an HTTP response model.
+The reader owns framing and JSON syntax concerns. It does not decide contract validity,
+construct `EventEnvelope`, persist records, or accumulate the complete upload. Its
+yielded result should preserve record order and enough location information, such as a
+one-based record number, for later accounting and diagnosis without embedding an HTTP
+response model.
 
 Before implementation, define and test the minimal framing behavior needed by the reader: LF and CRLF handling, blank-line treatment, and whether a syntactically complete final JSON object at a clean end-of-stream is a complete record without a trailing newline. These are transport edge cases required by this step, not reasons to choose upload limits or repair malformed JSON. An incomplete or malformed final record must never be repaired heuristically.
 
@@ -110,7 +133,9 @@ The public surface should expose asynchronous iteration, such as `IAsyncEnumerab
 #### What this step proves
 
 - Records are yielded in order before the complete upload has been buffered.
-- Valid representative records become `EventEnvelope` values with opaque nested payloads intact as JSON values.
+- Valid representative records are parsed once into untrusted JSON values that the
+  Step 1 validator can turn into `EventEnvelope` values, with opaque nested payloads
+  intact.
 - A malformed record produces a record-level parse failure and does not prevent a later valid record from being yielded.
 - Clean termination, malformed final input, newline variants, cancellation, and the selected blank-line behavior are deterministic and tested.
 - The reader buffers at most its current record; record-size protection remains a later decision.

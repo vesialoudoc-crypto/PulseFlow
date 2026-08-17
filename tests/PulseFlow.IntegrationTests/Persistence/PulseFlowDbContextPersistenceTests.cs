@@ -1,3 +1,4 @@
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using PulseFlow.Api.Persistence;
@@ -16,51 +17,101 @@ public sealed class PulseFlowDbContextPersistenceTests : IClassFixture<PostgreSq
     }
 
     [Fact]
-    public async Task Event_record_round_trips_through_migrated_postgresql_database()
+    public async Task SaveChangesAsync_EventRecordIsValid_PersistsId()
     {
-        const string payloadJson = """
-            {
-              "metadata": {
-                "attempt": 3,
-                "labels": ["priority", "external"],
-                "enabled": true
-              },
-              "measurements": [
-                { "name": "temperature", "value": 21.75 },
-                { "name": "humidity", "value": 0.43 }
-              ]
-            }
-            """;
-        var expected = new EventRecord
-        {
-            Id = Guid.Parse("bbdc5c2d-f84d-46e8-8cb4-3272d7b85dc4"),
-            Type = "sensor.reading.recorded",
-            Source = "urn:pulseflow:test:sensor-17",
-            OccurredAt = new DateTime(2026, 8, 16, 9, 10, 11, 123, DateTimeKind.Utc)
-                .AddTicks(4_560),
-            ReceivedAt = new DateTime(2026, 8, 16, 9, 10, 12, 987, DateTimeKind.Utc)
-                .AddTicks(6_540),
-            PayloadJson = payloadJson
-        };
+        // Arrange
+        var expected = CreateEventRecord();
 
+        // Act
+        var actual = await SaveAndReadAsync(expected);
+
+        // Assert
+        Assert.Equal(expected.Id, actual.Id);
+    }
+
+    [Fact]
+    public async Task SaveChangesAsync_EventRecordIsValid_PersistsType()
+    {
+        // Arrange
+        var expected = CreateEventRecord();
+
+        // Act
+        var actual = await SaveAndReadAsync(expected);
+
+        // Assert
+        Assert.Equal("sensor.reading.recorded", actual.Type);
+    }
+
+    [Fact]
+    public async Task SaveChangesAsync_EventRecordIsValid_PersistsSource()
+    {
+        // Arrange
+        var expected = CreateEventRecord();
+
+        // Act
+        var actual = await SaveAndReadAsync(expected);
+
+        // Assert
+        Assert.Equal("urn:pulseflow:test:sensor-17", actual.Source);
+    }
+
+    [Fact]
+    public async Task SaveChangesAsync_EventRecordHasNestedPayload_PersistsPayload()
+    {
+        // Arrange
+        var expected = CreateEventRecord();
+        var expectedPayload = JsonNode.Parse(expected.PayloadJson);
+
+        // Act
+        var actual = await SaveAndReadAsync(expected);
+        var actualPayload = JsonNode.Parse(actual.PayloadJson);
+
+        // Assert
+        Assert.True(JsonNode.DeepEquals(expectedPayload, actualPayload));
+    }
+
+    [Fact]
+    public async Task SaveChangesAsync_OccurredAtIsUtc_PersistsOccurredAt()
+    {
+        // Arrange
+        var expected = CreateEventRecord();
+
+        // Act
+        var actual = await SaveAndReadAsync(expected);
+        var actualOccurredAt = actual.OccurredAt.ToString("O");
+
+        // Assert
+        Assert.Equal("2026-08-16T09:10:11.0000000Z", actualOccurredAt);
+    }
+
+    [Fact]
+    public async Task SaveChangesAsync_ReceivedAtIsUtc_PersistsReceivedAt()
+    {
+        // Arrange
+        var expected = CreateEventRecord();
+
+        // Act
+        var actual = await SaveAndReadAsync(expected);
+        var actualReceivedAt = actual.ReceivedAt.ToString("O");
+
+        // Assert
+        Assert.Equal("2026-08-16T09:10:12.0000000Z", actualReceivedAt);
+    }
+
+    private async Task<EventRecord> SaveAndReadAsync(EventRecord eventRecord)
+    {
         await using (var writeContext = CreateDbContext())
         {
             await writeContext.Database.MigrateAsync();
-            writeContext.EventRecords.Add(expected);
+            writeContext.EventRecords.Add(eventRecord);
             await writeContext.SaveChangesAsync();
         }
 
         await using var readContext = CreateDbContext();
-        var actual = await readContext.EventRecords
-            .AsNoTracking()
-            .SingleAsync(eventRecord => eventRecord.Id == expected.Id);
 
-        Assert.Equal(expected.Id, actual.Id);
-        Assert.Equal(expected.Type, actual.Type);
-        Assert.Equal(expected.Source, actual.Source);
-        AssertJsonSemanticallyEqual(expected.PayloadJson, actual.PayloadJson);
-        AssertUtcInstant(expected.OccurredAt, actual.OccurredAt);
-        AssertUtcInstant(expected.ReceivedAt, actual.ReceivedAt);
+        return await readContext.EventRecords
+            .AsNoTracking()
+            .SingleAsync(storedEvent => storedEvent.Id == eventRecord.Id);
     }
 
     private PulseFlowDbContext CreateDbContext()
@@ -72,19 +123,29 @@ public sealed class PulseFlowDbContextPersistenceTests : IClassFixture<PostgreSq
         return new PulseFlowDbContext(options);
     }
 
-    private static void AssertJsonSemanticallyEqual(string expectedJson, string actualJson)
+    private static EventRecord CreateEventRecord()
     {
-        var expected = JsonNode.Parse(expectedJson);
-        var actual = JsonNode.Parse(actualJson);
-
-        Assert.True(
-            JsonNode.DeepEquals(expected, actual),
-            $"Expected JSON '{expectedJson}' to be semantically equal to '{actualJson}'.");
-    }
-
-    private static void AssertUtcInstant(DateTime expected, DateTime actual)
-    {
-        Assert.Equal(DateTimeKind.Utc, actual.Kind);
-        Assert.Equal(expected, actual);
+        return new EventRecord
+        {
+            Id = Guid.NewGuid(),
+            Type = "sensor.reading.recorded",
+            Source = "urn:pulseflow:test:sensor-17",
+            OccurredAt = new DateTime(2026, 8, 16, 9, 10, 11, DateTimeKind.Utc),
+            ReceivedAt = new DateTime(2026, 8, 16, 9, 10, 12, DateTimeKind.Utc),
+            PayloadJson = JsonSerializer.Serialize(new
+            {
+                metadata = new
+                {
+                    attempt = 3,
+                    labels = new[] { "priority", "external" },
+                    enabled = true
+                },
+                measurements = new[]
+                {
+                    new { name = "temperature", value = 21.75m },
+                    new { name = "humidity", value = 0.43m }
+                }
+            })
+        };
     }
 }

@@ -18,4 +18,8 @@
     <Using Include="Xunit" />
   </ItemGroup>
 
+  <ItemGroup>
+    <ProjectReference Include="..\..\src\PulseFlow.Api\PulseFlow.Api.csproj" />
+  </ItemGroup>
+
 </Project>
