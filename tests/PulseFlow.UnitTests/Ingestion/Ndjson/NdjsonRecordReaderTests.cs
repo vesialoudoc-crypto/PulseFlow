@@ -246,6 +246,38 @@ public sealed class NdjsonRecordReaderTests
     }
 
     [Fact]
+    public async Task ReadAsync_RecordSpansMultipleReadBuffers_YieldsCompleteParsedRecord()
+    {
+        // Arrange
+        const int ReaderBufferSize = 4096;
+        var expectedData = new string('x', ReaderBufferSize + 512);
+        var record = CreateRecordJson(
+            type: "diagnostic.snapshot.created",
+            source: "device-17",
+            occurredAt: "2026-08-17T10:00:00Z",
+            payload: new { data = expectedData });
+        var input = string.Join('\n', record, string.Empty);
+
+        // Act
+        var results = await ReadAllAsync(input);
+
+        // Assert
+        Assert.True(Encoding.UTF8.GetByteCount(expectedData) > ReaderBufferSize);
+
+        var result = Assert.Single(results);
+        Assert.False(result.IsMalformed);
+
+        var parsedJson = Assert.IsType<JsonElement>(result.ParsedJson);
+        var actualData = Assert.IsType<string>(
+            parsedJson
+                .GetProperty("payload")
+                .GetProperty("data")
+                .GetString());
+
+        Assert.Equal(expectedData, actualData);
+    }
+
+    [Fact]
     public async Task ReadAsync_CancellationIsRequested_PropagatesOperationCanceledException()
     {
         // Arrange
