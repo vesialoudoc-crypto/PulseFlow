@@ -1,10 +1,12 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text;
+using System.Text.Json;
 using System.Text.Json.Nodes;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using PulseFlow.Api.Persistence;
+using PulseFlow.Api.Persistence.Events;
 using PulseFlow.IntegrationTests.Infrastructure;
 
 namespace PulseFlow.IntegrationTests.Ingestion;
@@ -48,16 +50,19 @@ public sealed class EventIngestionTests :
     public async Task PostEvents_ValidEvent_ReturnsAcceptedResult()
     {
         // Arrange
-        const string ndjson =
-            """{"type":"test","source":"integration-test","occurredAt":"2026-08-17T10:00:00Z","payload":{"value":42}}""";
-        using var content = CreateNdjsonContent(ndjson);
+        var occurredAt = new DateTime(2026, 8, 17, 10, 0, 0, DateTimeKind.Utc);
+        var payload = new { value = 42 };
+        using var content = CreateEventContent(
+            type: "test",
+            source: "integration-test",
+            occurredAt,
+            payload);
 
         // Act
         using var response = await _client.PostAsync("/api/events", content);
         var result = await response.Content.ReadFromJsonAsync<IngestEventsResponse>();
 
         // Assert
-        response.EnsureSuccessStatusCode();
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.NotNull(result);
         Assert.Equal(1, result!.Total);
@@ -69,38 +74,62 @@ public sealed class EventIngestionTests :
     public async Task PostEvents_ValidEvent_PersistsEvent()
     {
         // Arrange
-        const string ndjson =
-            """{"type":"test","source":"integration-test","occurredAt":"2026-08-17T10:00:00Z","payload":{"value":42}}""";
-        using var content = CreateNdjsonContent(ndjson);
+        const string type = "test";
+        const string source = "integration-test";
+        var occurredAt = new DateTime(2026, 8, 17, 10, 0, 0, DateTimeKind.Utc);
+        var payload = new { value = 42 };
+        using var content = CreateEventContent(type, source, occurredAt, payload);
 
         // Act
         using var response = await _client.PostAsync("/api/events", content);
+        var storedEvent = await GetSingleStoredEventAsync();
 
         // Assert
         response.EnsureSuccessStatusCode();
 
-        await using var scope = _factory.Services.CreateAsyncScope();
-        var dbContext = scope.ServiceProvider.GetRequiredService<PulseFlowDbContext>();
-        var storedEvent = await dbContext.EventRecords
-            .AsNoTracking()
-            .SingleAsync();
-
-        Assert.Equal("test", storedEvent.Type);
-        Assert.Equal("integration-test", storedEvent.Source);
-        Assert.Equal(
-            new DateTime(2026, 8, 17, 10, 0, 0, DateTimeKind.Utc),
-            storedEvent.OccurredAt);
-        Assert.True(
-            JsonNode.DeepEquals(
-                JsonNode.Parse("""{"value":42}"""),
-                JsonNode.Parse(storedEvent.PayloadJson)));
+        Assert.Equal(type, storedEvent.Type);
+        Assert.Equal(source, storedEvent.Source);
+        Assert.Equal(occurredAt, storedEvent.OccurredAt);
+        AssertJsonEquivalent(
+            JsonSerializer.Serialize(payload),
+            storedEvent.PayloadJson);
     }
 
     #region Test helpers
 
-    private static StringContent CreateNdjsonContent(string ndjson)
+    private static StringContent CreateEventContent(
+        string type,
+        string source,
+        DateTime occurredAt,
+        object payload)
     {
+        var ndjson = JsonSerializer.Serialize(new
+        {
+            type,
+            source,
+            occurredAt,
+            payload
+        });
+
         return new StringContent(ndjson, Encoding.UTF8, "application/x-ndjson");
+    }
+
+    private async Task<EventRecord> GetSingleStoredEventAsync()
+    {
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<PulseFlowDbContext>();
+
+        return await dbContext.EventRecords
+            .AsNoTracking()
+            .SingleAsync();
+    }
+
+    private static void AssertJsonEquivalent(string expectedJson, string actualJson)
+    {
+        Assert.True(
+            JsonNode.DeepEquals(
+                JsonNode.Parse(expectedJson),
+                JsonNode.Parse(actualJson)));
     }
 
     private sealed class IngestEventsResponse
