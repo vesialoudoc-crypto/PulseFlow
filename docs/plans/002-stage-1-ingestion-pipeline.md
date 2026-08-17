@@ -2,8 +2,8 @@
 
 **Document type:** PLAN
 
-**Status:** In progress; Steps 1 through 5 implemented and verified, with the
-focused Step 6 end-to-end test foundation in progress
+**Status:** In progress; Steps 1 through 6 implemented and verified; Step 7 final
+review and completion checkpoint remain
 
 **ADR status:** This document is not an ADR. It sequences implementation of the design accepted in [ADR 0001](../decisions/0001-use-ndjson-for-batch-ingestion.md), [ADR 0002](../decisions/0002-use-chunked-postgresql-persistence-for-ingestion.md), and [ADR 0003](../decisions/0003-construct-event-envelope-after-contract-validation.md); it does not replace those decisions or describe a fully implemented pipeline.
 Exact stream framing for Step 2 is accepted in
@@ -47,13 +47,14 @@ IEventChunkStore
 PostgreSQL commit
 ```
 
-The complete flow above remains a target sequence. Steps 1 and 2 implement the
+The complete flow above is implemented through Step 6. Steps 1 and 2 implement the
 `EventEnvelope`/validation boundary and the NDJSON reader/JSON syntax boundary. Step
 3 implements the durable chunk-store boundary and its EF Core translation to
 `EventRecord`. Step 4 implements orchestration, chunk formation, and normal-completion
 accounting. Step 5 implements the controller HTTP boundary, application persistence
 wiring, configuration validation, centralized error handling, and Development
-OpenAPI/Swagger UI. End-to-end HTTP-to-PostgreSQL verification remains unimplemented.
+OpenAPI/Swagger UI. Step 6 verifies the HTTP-to-PostgreSQL path against real
+PostgreSQL.
 
 ## Planning constraints
 
@@ -299,11 +300,14 @@ Application startup must not silently establish a production migration execution
 
 ### Step 6: Add end-to-end integration tests against real PostgreSQL
 
-**Implementation status:** In progress. The reusable per-test HTTP and PostgreSQL
-setup, successful-response accounting scenario, committed-row scenario, mixed-input
-accounting, and valid persistence across a full plus final partial chunk are
-implemented and verified. The deterministic later-chunk persistence-failure scenario
-and other remaining Step 6 scenarios are intentionally pending.
+**Implementation status:** Completed on 2026-08-18. The reusable per-test HTTP and
+PostgreSQL setup, successful-response accounting scenario, committed-row scenario,
+mixed-input accounting, valid persistence across a full plus final partial chunk, and
+the deterministic persistence failure after an earlier real PostgreSQL commit are
+implemented and verified. A separate cancellation or truncated-final-record E2E test
+was not added because the focused `NdjsonRecordReader` tests already prove those
+framing semantics and it would not establish an additional HTTP or persistence
+guarantee.
 
 #### Responsibility introduced
 
@@ -315,8 +319,13 @@ The representative scenarios should include:
 - a mixed request containing valid, malformed, and contract-invalid records, followed by another valid record, proving independent rejection and continued processing;
 - enough valid records to prove a committed full chunk and a committed final partial chunk;
 - normal-completion response accounting that matches the rows committed in PostgreSQL;
-- a deterministic mid-request PostgreSQL failure scenario, once the Step 5 HTTP behavior is accepted, proving that earlier committed chunks remain durable and the failing chunk is not reported as accepted;
-- application cancellation or truncated-final-record behavior where it can be made deterministic and useful without introducing retry or idempotency semantics.
+- a deterministic persistence failure after an earlier real PostgreSQL commit,
+  proving that earlier committed chunks remain durable, the failing chunk is absent,
+  and the HTTP request receives the accepted 500 failure response. The test failure
+  is injected by a test-only store; it does not terminate or corrupt PostgreSQL;
+- no separate application-cancellation or truncated-final-record E2E scenario: the
+  focused `NdjsonRecordReader` tests already prove those framing semantics, and an
+  additional E2E test would not establish a new HTTP or persistence guarantee.
 
 #### Conceptual files and types
 

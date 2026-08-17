@@ -3,8 +3,12 @@ using System.Net.Http.Json;
 using System.Text;
 using System.Text.Json;
 using System.Text.Json.Nodes;
+using Microsoft.AspNetCore.Hosting;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
+using PulseFlow.Api.Ingestion.Contracts;
+using PulseFlow.Api.Ingestion.Persistence;
 using PulseFlow.Api.Persistence;
 using PulseFlow.Api.Persistence.Events;
 using PulseFlow.IntegrationTests.Infrastructure;
@@ -187,6 +191,44 @@ public sealed class EventIngestionTests :
         Assert.Equal(occurredAtC, storedEvents[2].OccurredAt);
     }
 
+    [Fact]
+    public async Task PostEvents_LaterChunkFails_KeepsEarlierCommittedChunk()
+    {
+        // Arrange
+        const string firstType = "failure-a";
+        const string secondType = "failure-b";
+        const string failingFirstType = "failure-c";
+        const string failingSecondType = "failure-d";
+
+        using var failureFactory = _factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IEventChunkStore>();
+                services.AddScoped<IEventChunkStore>(serviceProvider =>
+                    new FailOnSecondCallEventChunkStore(
+                        serviceProvider.GetRequiredService<PulseFlowDbContext>()));
+            });
+        });
+        using var failureClient = failureFactory.CreateClient();
+        using var content = CreateNdjsonContent(
+            CreateValidEventJson(firstType),
+            CreateValidEventJson(secondType),
+            CreateValidEventJson(failingFirstType),
+            CreateValidEventJson(failingSecondType));
+
+        // Act
+        using var response = await failureClient.PostAsync("/api/events", content);
+        var storedEvents = await GetStoredEventsAsync();
+
+        // Assert
+        Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
+        Assert.Equal(2, storedEvents.Count);
+        Assert.Equal([firstType, secondType], storedEvents.Select(eventRecord => eventRecord.Type));
+        Assert.DoesNotContain(storedEvents, eventRecord => eventRecord.Type == failingFirstType);
+        Assert.DoesNotContain(storedEvents, eventRecord => eventRecord.Type == failingSecondType);
+    }
+
     #region Test helpers
 
     private static StringContent CreateEventContent(
@@ -260,6 +302,32 @@ public sealed class EventIngestionTests :
             JsonNode.DeepEquals(
                 JsonNode.Parse(expectedJson),
                 JsonNode.Parse(actualJson)));
+    }
+
+    private sealed class FailOnSecondCallEventChunkStore : IEventChunkStore
+    {
+        private readonly EfCoreEventChunkStore _inner;
+        private int _callCount;
+
+        public FailOnSecondCallEventChunkStore(PulseFlowDbContext dbContext)
+        {
+            _inner = new EfCoreEventChunkStore(dbContext);
+        }
+
+        public Task StoreAsync(
+            IReadOnlyCollection<EventEnvelope> events,
+            CancellationToken cancellationToken = default)
+        {
+            _callCount++;
+
+            if (_callCount == 2)
+            {
+                throw new InvalidOperationException(
+                    "Deterministic integration-test persistence failure.");
+            }
+
+            return _inner.StoreAsync(events, cancellationToken);
+        }
     }
 
     private sealed class IngestEventsResponse
