@@ -300,8 +300,10 @@ Application startup must not silently establish a production migration execution
 ### Step 6: Add end-to-end integration tests against real PostgreSQL
 
 **Implementation status:** In progress. The reusable per-test HTTP and PostgreSQL
-setup, successful-response accounting scenario, and one committed-row scenario are
-implemented and verified. The remaining Step 6 scenarios are intentionally pending.
+setup, successful-response accounting scenario, committed-row scenario, mixed-input
+accounting, and valid persistence across a full plus final partial chunk are
+implemented and verified. The deterministic later-chunk persistence-failure scenario
+and other remaining Step 6 scenarios are intentionally pending.
 
 #### Responsibility introduced
 

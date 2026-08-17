@@ -21,7 +21,8 @@ namespace PulseFlow.IntegrationTests.Infrastructure
                 config.AddInMemoryCollection(
                     new Dictionary<string, string?>
                     {
-                        ["ConnectionStrings:PulseFlow"] = _connectionString
+                        ["ConnectionStrings:PulseFlow"] = _connectionString,
+                        ["Ingestion:ChunkCapacity"] = "2"
                     });
             });
 

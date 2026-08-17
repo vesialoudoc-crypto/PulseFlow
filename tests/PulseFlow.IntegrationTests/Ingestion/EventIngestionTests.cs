@@ -52,6 +52,7 @@ public sealed class EventIngestionTests :
         // Arrange
         var occurredAt = new DateTime(2026, 8, 17, 10, 0, 0, DateTimeKind.Utc);
         var payload = new { value = 42 };
+
         using var content = CreateEventContent(
             type: "test",
             source: "integration-test",
@@ -65,7 +66,7 @@ public sealed class EventIngestionTests :
         // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
         Assert.NotNull(result);
-        Assert.Equal(1, result!.Total);
+        Assert.Equal(1, result.Total);
         Assert.Equal(1, result.Accepted);
         Assert.Equal(0, result.Rejected);
     }
@@ -78,7 +79,12 @@ public sealed class EventIngestionTests :
         const string source = "integration-test";
         var occurredAt = new DateTime(2026, 8, 17, 10, 0, 0, DateTimeKind.Utc);
         var payload = new { value = 42 };
-        using var content = CreateEventContent(type, source, occurredAt, payload);
+
+        using var content = CreateEventContent(
+            type,
+            source,
+            occurredAt,
+            payload);
 
         // Act
         using var response = await _client.PostAsync("/api/events", content);
@@ -95,6 +101,92 @@ public sealed class EventIngestionTests :
             storedEvent.PayloadJson);
     }
 
+    [Fact]
+    public async Task PostEvents_MixedRecords_ReturnsExpectedAccounting()
+    {
+        // Arrange
+        var validA = CreateValidEventJson("accounting-a");
+        const string malformed = "{ not-json";
+        var invalid = JsonSerializer.Serialize(new { type = "invalid" });
+        var validB = CreateValidEventJson("accounting-b");
+        var validC = CreateValidEventJson("accounting-c");
+
+        using var content = CreateNdjsonContent(
+            validA,
+            malformed,
+            invalid,
+            validB,
+            validC);
+
+        // Act
+        using var response = await _client.PostAsync("/api/events", content);
+        var result = await response.Content.ReadFromJsonAsync<IngestEventsResponse>();
+
+        // Assert
+        Assert.Equal(HttpStatusCode.OK, response.StatusCode);
+        Assert.NotNull(result);
+        Assert.Equal(5, result.Total);
+        Assert.Equal(3, result.Accepted);
+        Assert.Equal(2, result.Rejected);
+    }
+
+    [Fact]
+    public async Task PostEvents_MixedRecords_PersistsValidEventsAcrossChunks()
+    {
+        // Arrange
+        var occurredAtA = new DateTime(2026, 8, 17, 11, 0, 0, DateTimeKind.Utc);
+        var occurredAtB = new DateTime(2026, 8, 17, 11, 1, 0, DateTimeKind.Utc);
+        var occurredAtC = new DateTime(2026, 8, 17, 11, 2, 0, DateTimeKind.Utc);
+
+        var validA = CreateEventJson(
+            type: "chunk-a",
+            source: "integration-test-a",
+            occurredAtA,
+            payload: new { value = "a" });
+
+        const string malformed = "{ not-json";
+        var invalid = JsonSerializer.Serialize(new { type = "invalid" });
+
+        var validB = CreateEventJson(
+            type: "chunk-b",
+            source: "integration-test-b",
+            occurredAtB,
+            payload: new { value = "b" });
+
+        var validC = CreateEventJson(
+            type: "chunk-c",
+            source: "integration-test-c",
+            occurredAtC,
+            payload: new { value = "c" });
+
+        using var content = CreateNdjsonContent(
+            validA,
+            malformed,
+            invalid,
+            validB,
+            validC);
+
+        // Act
+        using var response = await _client.PostAsync("/api/events", content);
+        var storedEvents = await GetStoredEventsAsync();
+
+        // Assert
+        response.EnsureSuccessStatusCode();
+        Assert.Equal(3, storedEvents.Count);
+
+        Assert.Equal("chunk-a", storedEvents[0].Type);
+        Assert.Equal("integration-test-a", storedEvents[0].Source);
+        Assert.Equal(occurredAtA, storedEvents[0].OccurredAt);
+
+        Assert.Equal("chunk-b", storedEvents[1].Type);
+        Assert.Equal("integration-test-b", storedEvents[1].Source);
+        Assert.Equal(occurredAtB, storedEvents[1].OccurredAt);
+
+        Assert.Equal("chunk-c", storedEvents[2].Type);
+        Assert.Equal("integration-test-c", storedEvents[2].Source);
+        Assert.Equal(occurredAtC, storedEvents[2].OccurredAt);
+    }
+
     #region Test helpers
 
     private static StringContent CreateEventContent(
@@ -103,15 +195,40 @@ public sealed class EventIngestionTests :
         DateTime occurredAt,
         object payload)
     {
-        var ndjson = JsonSerializer.Serialize(new
+        return CreateNdjsonContent(
+            CreateEventJson(type, source, occurredAt, payload));
+    }
+
+    private static string CreateValidEventJson(string type)
+    {
+        return CreateEventJson(
+            type,
+            source: "integration-test",
+            occurredAt: new DateTime(2026, 8, 17, 10, 0, 0, DateTimeKind.Utc),
+            payload: new { value = 42 });
+    }
+
+    private static string CreateEventJson(
+        string type,
+        string source,
+        DateTime occurredAt,
+        object payload)
+    {
+        return JsonSerializer.Serialize(new
         {
             type,
             source,
             occurredAt,
             payload
         });
+    }
 
-        return new StringContent(ndjson, Encoding.UTF8, "application/x-ndjson");
+    private static StringContent CreateNdjsonContent(params string[] records)
+    {
+        return new StringContent(
+            string.Join('\n', records),
+            Encoding.UTF8,
+            "application/x-ndjson");
     }
 
     private async Task<EventRecord> GetSingleStoredEventAsync()
@@ -124,7 +241,20 @@ public sealed class EventIngestionTests :
             .SingleAsync();
     }
 
-    private static void AssertJsonEquivalent(string expectedJson, string actualJson)
+    private async Task<List<EventRecord>> GetStoredEventsAsync()
+    {
+        await using var scope = _factory.Services.CreateAsyncScope();
+        var dbContext = scope.ServiceProvider.GetRequiredService<PulseFlowDbContext>();
+
+        return await dbContext.EventRecords
+            .AsNoTracking()
+            .OrderBy(eventRecord => eventRecord.Type)
+            .ToListAsync();
+    }
+
+    private static void AssertJsonEquivalent(
+        string expectedJson,
+        string actualJson)
     {
         Assert.True(
             JsonNode.DeepEquals(
