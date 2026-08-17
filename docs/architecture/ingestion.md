@@ -19,8 +19,11 @@ EventEnvelope-specific coded validation errors. `EventEnvelope` contains non-emp
 `JsonElement` `Payload`. The payload is cloned while the envelope is constructed, so
 it does not borrow the lifetime of the reader result.
 
-Later ingestion orchestration, chunk formation, application persistence wiring, and
-the HTTP endpoint remain unimplemented.
+The implemented Step 3 persistence boundary accepts one already-formed collection of
+valid `EventEnvelope` values. Its EF Core implementation translates them directly to
+the separate `EventRecord` representation and persists them through the existing
+`PulseFlowDbContext`. Later ingestion orchestration, chunk formation, application
+database wiring, and the HTTP endpoint remain unimplemented.
 
 ## Batch transport
 
@@ -100,6 +103,41 @@ The chunk size is operational configuration, not part of the public ingestion co
 
 The rationale and consequences are recorded in [ADR 0002](../decisions/0002-use-chunked-postgresql-persistence-for-ingestion.md).
 
+The implemented persistence boundary is structurally:
+
+```text
+IEventChunkStore
+    ↓
+EfCoreEventChunkStore
+    ↓
+PulseFlowDbContext
+    ↓
+PostgreSQL
+```
+
+`IEventChunkStore.StoreAsync` accepts an `IReadOnlyCollection<EventEnvelope>` and
+cancellation. The EF Core implementation creates one `EventRecord` per envelope,
+adds the complete supplied collection, and calls `SaveChangesAsync` once. Successful
+completion is the durability boundary for that supplied chunk; cancellation and
+persistence failures propagate.
+
+The direct translation is:
+
+```text
+EventRecord.Id          <- Guid.NewGuid()
+EventRecord.Type        <- EventEnvelope.Type
+EventRecord.Source      <- EventEnvelope.Source
+EventRecord.OccurredAt  <- EventEnvelope.OccurredAt
+EventRecord.ReceivedAt  <- DateTime.UtcNow
+EventRecord.PayloadJson <- EventEnvelope.Payload JSON
+```
+
+The payload is passed to the existing PostgreSQL `jsonb` mapping, which preserves its
+JSON semantics rather than original whitespace or property order. `Id` and
+`ReceivedAt` are persistence-only metadata and do not become part of `EventEnvelope`.
+The generation decision is recorded in
+[ADR 0005](../decisions/0005-generate-event-persistence-metadata-in-application.md).
+
 ## Not yet defined
 
 - record, upload, and record-count limits;
@@ -111,7 +149,7 @@ The rationale and consequences are recorded in [ADR 0002](../decisions/0002-use-
 - the concrete chunk size and its configuration source;
 - HTTP behavior when a database failure occurs after one or more chunks have committed;
 - PostgreSQL retry strategy, EF Core execution strategy, and transaction isolation level;
-- the database schema, data-access implementation, and migration strategy;
+- application database DI wiring and production migration execution;
 - the concrete validation library or framework.
 
 RabbitMQ, Redis, polling, and queue or stream technologies are not accepted parts of the architecture at this point.

@@ -2,11 +2,13 @@
 
 **Document type:** PLAN
 
-**Status:** In progress; Steps 1 and 2 implemented and verified
+**Status:** In progress; Steps 1 through 3 implemented and verified
 
 **ADR status:** This document is not an ADR. It sequences implementation of the design accepted in [ADR 0001](../decisions/0001-use-ndjson-for-batch-ingestion.md), [ADR 0002](../decisions/0002-use-chunked-postgresql-persistence-for-ingestion.md), and [ADR 0003](../decisions/0003-construct-event-envelope-after-contract-validation.md); it does not replace those decisions or describe a fully implemented pipeline.
 Exact stream framing for Step 2 is accepted in
-[ADR 0004](../decisions/0004-define-ndjson-record-framing.md).
+[ADR 0004](../decisions/0004-define-ndjson-record-framing.md). Persistence metadata
+generation for Step 3 is accepted in
+[ADR 0005](../decisions/0005-generate-event-persistence-metadata-in-application.md).
 
 ## Purpose
 
@@ -31,12 +33,18 @@ Event Contract v1 validation
     ↓
 EventEnvelope
     ↓
-later ingestion orchestration
+later ingestion orchestration and chunk formation
+    ↓
+IEventChunkStore
+    ↓
+PostgreSQL commit
 ```
 
 The complete flow above remains a target sequence. Steps 1 and 2 implement the
-`EventEnvelope`/validation boundary and the NDJSON reader/JSON syntax boundary.
-Orchestration, chunking, persistence wiring, and an HTTP endpoint remain unimplemented.
+`EventEnvelope`/validation boundary and the NDJSON reader/JSON syntax boundary. Step
+3 implements the durable chunk-store boundary and its EF Core translation to
+`EventRecord`. Orchestration, chunk formation, application persistence wiring, and an
+HTTP endpoint remain unimplemented.
 
 ## Planning constraints
 
@@ -161,13 +169,20 @@ The public surface should expose asynchronous iteration, such as `IAsyncEnumerab
 
 ### Step 3: Add `IEventChunkStore` and its EF Core implementation
 
+**Implementation status:** Completed on 2026-08-17. See the
+[Step 3 checkpoint](../progress/2026-08-17-014-event-chunk-store.md).
+
 #### Responsibility introduced
 
 Create the narrow durable boundary needed by the next handler step. `IEventChunkStore` persists one already-formed chunk and completes successfully only after the PostgreSQL operation for that chunk commits. The EF Core implementation uses the existing `PulseFlowDbContext`, maps ingestion data to new `EventRecord` instances, and performs one chunk persistence operation.
 
 The store contract must not expose `DbContext`, EF Core entity-state APIs, or transaction objects to the handler. It also must not present a successful return before the commit that makes the chunk durable. Cancellation and persistence failures propagate through this boundary; retry policy and HTTP interpretation do not belong here.
 
-Before implementing the mapping, make the smallest explicit implementation choice for generation of the persistence-only `id` and `received_at` values, including a testable clock boundary if time is assigned by the process. That choice is required to create valid `EventRecord` rows but does not change Event Contract v1. Record it in the Step 3 checkpoint or architecture update if it establishes lasting application behavior; create an ADR only if the choice is architecturally significant.
+The implemented mapping follows
+[ADR 0005](../decisions/0005-generate-event-persistence-metadata-in-application.md):
+the application assigns persistence-only IDs with `Guid.NewGuid()` and receipt times
+with `DateTime.UtcNow` directly during translation. No clock, ID generator, mapper, or
+factory abstraction is introduced. This does not change Event Contract v1.
 
 #### Conceptual files and types
 
