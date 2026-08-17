@@ -2,13 +2,16 @@
 
 **Document type:** PLAN
 
-**Status:** In progress; Steps 1 through 3 implemented and verified
+**Status:** In progress; Steps 1 through 4 implemented and verified
 
 **ADR status:** This document is not an ADR. It sequences implementation of the design accepted in [ADR 0001](../decisions/0001-use-ndjson-for-batch-ingestion.md), [ADR 0002](../decisions/0002-use-chunked-postgresql-persistence-for-ingestion.md), and [ADR 0003](../decisions/0003-construct-event-envelope-after-contract-validation.md); it does not replace those decisions or describe a fully implemented pipeline.
 Exact stream framing for Step 2 is accepted in
 [ADR 0004](../decisions/0004-define-ndjson-record-framing.md). Persistence metadata
 generation for Step 3 is accepted in
 [ADR 0005](../decisions/0005-generate-event-persistence-metadata-in-application.md).
+The simple orchestration result and persistence-failure propagation for Step 4 are
+accepted in
+[ADR 0006](../decisions/0006-keep-ingestion-handler-failure-propagation-simple.md).
 
 ## Purpose
 
@@ -43,8 +46,8 @@ PostgreSQL commit
 The complete flow above remains a target sequence. Steps 1 and 2 implement the
 `EventEnvelope`/validation boundary and the NDJSON reader/JSON syntax boundary. Step
 3 implements the durable chunk-store boundary and its EF Core translation to
-`EventRecord`. Orchestration, chunk formation, application persistence wiring, and an
-HTTP endpoint remain unimplemented.
+`EventRecord`. Step 4 implements orchestration, chunk formation, and normal-completion
+accounting. Application persistence wiring and an HTTP endpoint remain unimplemented.
 
 ## Planning constraints
 
@@ -211,22 +214,23 @@ The interface should accept the narrow ingestion data needed to persist a chunk,
 
 ### Step 4: Add `IngestEventsHandler`, configurable chunk formation, and accounting
 
+**Implementation status:** Completed on 2026-08-17. See the
+[Step 4 checkpoint](../progress/2026-08-17-015-ingestion-handler.md).
+
 #### Responsibility introduced
 
 Orchestrate ingestion independently of HTTP and EF Core. The handler consumes the asynchronous sequence of per-record reader results, applies record validation to parsed envelopes, excludes malformed and invalid records from persistence, forms bounded chunks of valid records, and passes each full or final partial chunk to `IEventChunkStore` in order.
 
-The handler increments the accepted count only after the corresponding store call succeeds. It records malformed or contract-invalid records as rejected without preventing later readable records from being processed. If persistence fails, records in the failing chunk are not accepted, while counts for earlier committed chunks remain true. The application-level outcome must retain enough information to distinguish rejected input from valid-but-not-committed records without deciding an HTTP status code.
+The handler increments the accepted count only after the corresponding store call succeeds. It records malformed or contract-invalid records in one rejected total without preventing later readable records from being processed. On normal completion it returns only accepted and rejected totals. If persistence fails, records in the failing chunk are not accepted, earlier committed chunks remain durable, the original exception propagates, and no handler result is returned.
 
 Chunk capacity must be supplied as validated configuration to the handler. Tests should use deliberately small values to prove multiple chunks and final-chunk flushing; those values are test inputs and do not accept a concrete operational chunk size. The production configuration source and value are wired in Step 5.
 
-Before completing this step, define the application-level propagation of a chunk failure: for example, a failure result carrying partial accounting or a use-case exception that carries equivalent context. This is required so the HTTP layer can later apply a separately chosen contract. It must not silently classify the failed chunk as rejected input or accepted data.
+This simple failure behavior is a deliberate trade-off recorded in [ADR 0006](../decisions/0006-keep-ingestion-handler-failure-propagation-simple.md). It does not decide how the later HTTP layer represents a failure after earlier chunks have committed.
 
 #### Conceptual files and types
 
 - `src/PulseFlow.Api/Ingestion/IngestEventsHandler.cs`
-- an ingestion command/input abstraction over the asynchronous record sequence if needed
-- `IngestEventsResult` or an equivalent non-HTTP accounting model
-- a focused chunk-size options/value type if it prevents invalid capacities
+- `src/PulseFlow.Api/Ingestion/IngestEventsResult.cs`
 - `tests/PulseFlow.UnitTests/Ingestion/IngestEventsHandlerTests.cs`
 - a small fake or recording `IEventChunkStore` owned by the unit tests
 
@@ -236,7 +240,7 @@ Before completing this step, define the application-level propagation of a chunk
 - Malformed and invalid records are rejected independently, and later valid records remain eligible for persistence.
 - Only valid records enter store calls; full chunks and the final partial chunk have the expected ordered contents for several configured test capacities.
 - Accepted totals advance only after successful store completion.
-- On a later store failure, earlier committed chunks remain accepted and the failing chunk is represented as not committed.
+- On a later store failure, the persistence exception propagates, earlier committed chunks remain durable, processing stops, and no partial handler result is invented.
 - The handler has no dependency on `HttpContext`, endpoint response types, `PulseFlowDbContext`, or EF Core.
 
 #### Explicit non-goals
@@ -255,7 +259,7 @@ Expose the Stage 1 HTTP ingestion surface and compose the previously proved resp
 
 Register the reader, validator, handler, `IEventChunkStore`, and existing `PulseFlowDbContext` with lifetimes compatible with streaming one request and using one context-backed store at a time. Bind and validate the PostgreSQL connection string and chunk-capacity configuration. Configure the Npgsql EF Core provider for application execution.
 
-This step requires a just-in-time contract decision for the HTTP method and route, NDJSON media type behavior, normal success and partial-invalid response shape, and exact status/response behavior when PostgreSQL fails after zero or more earlier chunks have committed. Document the accepted HTTP behavior before or with its implementation and ensure runtime OpenAPI describes the surface that actually exists. The decision must preserve the ADR 0002 acceptance boundary and must not report an uncommitted chunk as accepted.
+This step requires a just-in-time contract decision for the HTTP method and route, NDJSON media type behavior, normal success and partial-invalid response shape, and exact status/response behavior when PostgreSQL fails after zero or more earlier chunks have committed. Document the accepted HTTP behavior before or with its implementation and ensure runtime OpenAPI describes the surface that actually exists. The decision must preserve the ADR 0002 acceptance boundary, account for ADR 0006 returning no handler result on failure, and must not report an uncommitted chunk as accepted.
 
 Application startup must not silently establish a production migration execution strategy. For Stage 1, the application may require a separately migrated database while integration tests apply committed migrations as test setup. Any automatic startup migration behavior requires an explicit decision rather than being inferred from `AddDbContext` wiring.
 
@@ -295,7 +299,7 @@ The representative scenarios should include:
 - a valid multi-record NDJSON request whose rows and opaque nested payloads are persisted;
 - a mixed request containing valid, malformed, and contract-invalid records, followed by another valid record, proving independent rejection and continued processing;
 - enough valid records to prove a committed full chunk and a committed final partial chunk;
-- response accounting that matches the rows committed in PostgreSQL;
+- normal-completion response accounting that matches the rows committed in PostgreSQL;
 - a deterministic mid-request PostgreSQL failure scenario, once the Step 5 HTTP behavior is accepted, proving that earlier committed chunks remain durable and the failing chunk is not reported as accepted;
 - application cancellation or truncated-final-record behavior where it can be made deterministic and useful without introducing retry or idempotency semantics.
 
@@ -310,7 +314,7 @@ The representative scenarios should include:
 - A client can stream Stage 1 NDJSON to the real application and committed valid records can be observed in real PostgreSQL.
 - `EventEnvelope` remains distinct from `EventRecord` while all accepted contract fields survive the complete mapping and persistence path.
 - One malformed or invalid record does not reject other completely received valid records.
-- Actual persisted rows and returned accepted/rejected/not-committed accounting respect the PostgreSQL commit boundary.
+- Actual persisted rows and normal-completion accepted/rejected accounting respect the PostgreSQL commit boundary; failure behavior matches the HTTP decision accepted in Step 5.
 - The clean test environment reaches the intended schema through the repository's committed migrations.
 
 #### Explicit non-goals
@@ -367,7 +371,7 @@ Create a new ADR only if implementation required a significant architectural dec
 The following remain unresolved until a later implementation step demonstrably requires the decision:
 
 - **Concrete chunk size:** Step 4 proves configurable formation with test-supplied sizes; Step 5 must provide a valid runtime configuration, but no value is accepted as tuned or production-ready before measurement.
-- **Exact HTTP status and response on mid-request PostgreSQL failure:** required and documented in Step 5 before the endpoint contract is complete; Step 4 preserves non-HTTP partial accounting so the choice is not made in orchestration.
+- **Exact HTTP status and response on mid-request PostgreSQL failure:** required and documented in Step 5 before the endpoint contract is complete; Step 4 deliberately propagates the persistence exception without returning partial accounting, so HTTP behavior is not chosen in orchestration.
 - **Idempotency and deduplication:** deferred to the reliability stage. This plan does not prevent duplicates after an uncertain client outcome.
 - **Retry strategy:** no client, handler, store, EF Core, or PostgreSQL retry policy is selected here.
 - **RabbitMQ, Redis, and Outbox:** not part of the Stage 1 ingestion pipeline.
@@ -376,7 +380,7 @@ The following remain unresolved until a later implementation step demonstrably r
 - **Compression:** no compressed request format is selected.
 - **Production migration execution strategy:** committed migrations remain the schema artifact; how production applies them is separate from application `DbContext` registration and test setup.
 
-Other implementation choices remain just-in-time decision gates at the step where they first become unavoidable: Step 3 identifier and receipt-time assignment, Step 4 application-level persistence-failure propagation, and Step 5 the remaining public HTTP contract. Unknown top-level Event Contract property behavior also remains unresolved. None requires a new assembly or a generic persistence abstraction.
+Other implementation choices remain just-in-time decision gates at the step where they first become unavoidable. Step 3 resolved identifier and receipt-time assignment, and Step 4 resolved application-level persistence-failure propagation. Step 5 must resolve the remaining public HTTP contract. Unknown top-level Event Contract property behavior also remains unresolved. None requires a new assembly or a generic persistence abstraction.
 
 ## Completion criteria
 

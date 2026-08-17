@@ -22,8 +22,9 @@ it does not borrow the lifetime of the reader result.
 The implemented Step 3 persistence boundary accepts one already-formed collection of
 valid `EventEnvelope` values. Its EF Core implementation translates them directly to
 the separate `EventRecord` representation and persists them through the existing
-`PulseFlowDbContext`. Later ingestion orchestration, chunk formation, application
-database wiring, and the HTTP endpoint remain unimplemented.
+`PulseFlowDbContext`. The implemented Step 4 handler validates parsed records, forms
+and stores ordered chunks, and returns normal-completion accounting. Application
+database wiring and the HTTP endpoint remain unimplemented.
 
 ## Batch transport
 
@@ -101,6 +102,23 @@ Therefore:
 
 The chunk size is operational configuration, not part of the public ingestion contract. No concrete value is accepted; it must be tuned later using load measurements.
 
+`IngestEventsHandler` receives `EventEnvelopeValidator`, `IEventChunkStore`, and a
+positive integer chunk capacity directly through its constructor. It consumes
+`IAsyncEnumerable<NdjsonRecordResult>` and retains only the current record, current
+chunk, and accepted/rejected counters. Malformed and contract-invalid records both
+increment `Rejected`; they do not enter a chunk. Each full chunk and the final
+non-empty partial chunk are stored in input order. `Accepted` advances only after the
+corresponding store call completes successfully.
+
+On normal completion the handler returns `IngestEventsResult` containing only
+`Accepted` and `Rejected`. If a store call throws, the exception propagates unchanged,
+processing stops, and no result is returned. Earlier successfully stored chunks remain
+durable, while the failing chunk is not accepted. This is the deliberate simple
+failure model accepted in
+[ADR 0006](../decisions/0006-keep-ingestion-handler-failure-propagation-simple.md),
+not a claim of request-level atomicity. HTTP behavior and the retry/idempotency problem
+remain unresolved.
+
 The rationale and consequences are recorded in [ADR 0002](../decisions/0002-use-chunked-postgresql-persistence-for-ingestion.md).
 
 The implemented persistence boundary is structurally:
@@ -148,6 +166,7 @@ The generation decision is recorded in
 - downstream processing-transfer technology;
 - the concrete chunk size and its configuration source;
 - HTTP behavior when a database failure occurs after one or more chunks have committed;
+- retry and idempotency behavior for an overall failure after earlier chunks committed;
 - PostgreSQL retry strategy, EF Core execution strategy, and transaction isolation level;
 - application database DI wiring and production migration execution;
 - the concrete validation library or framework.
