@@ -244,14 +244,22 @@ Event Contract v1 validation
 PostgreSQL
 ```
 
-`PulseFlow.Api` remains the HTTP ingestion boundary. For the asynchronous path it
+`PulseFlow.Api` remains the HTTP ingestion boundary. For the first Stage 2 slice, it
 receives an NDJSON batch, performs only the request-level checks required before
-acceptance, publishes the batch for asynchronous work, and acknowledges that
-acceptance. It must not parse individual NDJSON records or apply Event Contract v1
-validation before publishing the batch. The Stage 1 synchronous `200` result with
-`total`, `accepted`, and `rejected` therefore is not the final Stage 2 response
-contract; asynchronous acknowledgement is expected to use a semantics such as HTTP
-`202 Accepted`, but its final response body has not been decided.
+acceptance, and publishes the complete raw NDJSON batch body to RabbitMQ. It does not
+use external raw-batch storage or publish only a reference or identifier. It must not
+parse individual NDJSON records or apply Event Contract v1 validation before
+publishing the batch.
+
+RabbitMQ publication confirmation is the Stage 2 HTTP acceptance boundary. The API
+returns HTTP `202 Accepted` only after RabbitMQ has confirmed successful publication
+of the batch; a publication failure must not return `202 Accepted`. The exact failure
+response is not further defined by this decision and continues to use the existing
+centralized error-handling boundary until a later implementation step needs more
+specific behavior. The Stage 1 synchronous `200` result with `total`, `accepted`,
+and `rejected` is therefore not the Stage 2 response contract, and the exact `202`
+response body remains undecided. These decisions are recorded in
+[ADR 0009](../decisions/0009-define-stage-2-rabbitmq-batch-acceptance-boundary.md).
 
 `EventParserConsumer` is the concrete asynchronous component. It receives an NDJSON
 batch from RabbitMQ, parses its records, applies the existing Event Contract v1
@@ -274,8 +282,6 @@ request. RabbitMQ and `EventParserConsumer` do not yet exist in the repository.
 - compression;
 - authentication and authorization;
 - idempotency, deduplication, and client retry behavior;
-- whether a RabbitMQ message carries the complete raw NDJSON batch or a reference to
-  separately stored raw data;
 - request, batch, and RabbitMQ message-size limits;
 - RabbitMQ exchange/queue topology, routing-key conventions, acknowledgement/requeue
   semantics, retry policy, dead-letter queues, and delivery guarantees;

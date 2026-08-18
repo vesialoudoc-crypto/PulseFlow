@@ -2,7 +2,7 @@
 
 **Document type:** PLAN
 
-**Status:** Not started
+**Status:** In progress
 
 **ADR status:** This document is not an ADR. It sequences implementation of the
 Stage 2 direction accepted in
@@ -75,7 +75,7 @@ asynchronous slice into speculative reliability or deployment work.
 
 ### Step 1: Decide the minimum asynchronous acceptance and publishing contract
 
-**Implementation status:** Not started.
+**Implementation status:** Completed on 2026-08-18.
 
 #### Responsibility introduced
 
@@ -86,9 +86,28 @@ batch representation passed to the broker. Record the decision and its consequen
 before production code changes.
 
 The decision must explicitly replace the Stage 1 assumption that the API can return
-record-level `total`, `accepted`, and `rejected` accounting. It may select a minimal
-HTTP 202 response only when the exact response body becomes necessary for the first
-implementation slice.
+record-level `total`, `accepted`, and `rejected` accounting.
+
+#### Accepted decision
+
+- The first Stage 2 slice publishes the complete raw NDJSON batch body as the
+  RabbitMQ message. `PulseFlow.Api` does not parse individual records or apply Event
+  Contract v1 validation before publication. It does not use external raw-batch
+  storage or publish only a batch reference or identifier.
+- RabbitMQ publication confirmation is the HTTP acceptance boundary. The API returns
+  HTTP `202 Accepted` only after RabbitMQ has confirmed successful publication of the
+  batch. A publication failure must not produce HTTP `202 Accepted`.
+- The exact failure response remains subject to the existing centralized error
+  handling until a later implementation step requires a narrower decision. This step
+  does not decide retry, Outbox, DLQ, requeue, idempotency, or delivery guarantees.
+- The Stage 1 synchronous `200` response with `total`, `accepted`, and `rejected` is
+  not the Stage 2 HTTP contract. Step 2 will remove HTTP and integration tests whose
+  specific purpose is to preserve that obsolete synchronous accounting contract;
+  parsing, validation, persistence, and other tests that remain valid behind the
+  RabbitMQ boundary are not candidates for removal merely because the boundary moves.
+
+The rationale and consequences are recorded in
+[ADR 0009](../decisions/0009-define-stage-2-rabbitmq-batch-acceptance-boundary.md).
 
 #### What this step proves
 
@@ -116,6 +135,11 @@ Step 1 request-level checks, publish the agreed batch representation to RabbitMQ
 return the agreed asynchronous-acceptance response. The endpoint no longer invokes
 the Stage 1 reader, validator, handler, or PostgreSQL persistence path before its
 acknowledgement.
+
+Remove, rather than rewrite, HTTP and integration tests whose purpose is specifically
+to preserve the obsolete Stage 1 `200` response with `total`, `accepted`, and
+`rejected`. Preserve tests for parsing, validation, persistence, and other behavior
+that remains valid behind the RabbitMQ boundary.
 
 #### What this step proves
 
@@ -225,8 +249,6 @@ then create an immutable checkpoint.
 The following are not selected by PLAN 003 and must be decided only when a bounded
 implementation step makes them necessary:
 
-- complete raw NDJSON batch versus separately stored-data reference as the RabbitMQ
-  message representation;
 - request, batch, and message-size limits; compression;
 - exchange/queue topology and routing-key conventions;
 - acknowledgement/requeue semantics, retries, dead-letter queues, and exact delivery

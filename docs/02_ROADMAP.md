@@ -107,8 +107,9 @@ Do not treat the initial chunk capacity as tuned, or select RabbitMQ, polling, a
 ### Expected Result
 
 `PulseFlow.Api` accepts an NDJSON batch without parsing individual records or applying
-Event Contract v1 validation, publishes accepted work to RabbitMQ, and acknowledges
-asynchronous acceptance. `EventParserConsumer` receives the batch, performs NDJSON
+Event Contract v1 validation, publishes the complete raw batch body to RabbitMQ, and
+returns HTTP `202 Accepted` only after RabbitMQ confirms successful publication.
+`EventParserConsumer` receives the batch, performs NDJSON
 parsing and Event Contract v1 validation, and persists valid events through an
 appropriate boundary to PostgreSQL. Multiple parser consumers can be introduced to
 increase parsing capacity independently of the API. The accepted RabbitMQ decision and
@@ -117,8 +118,6 @@ not required until its contract and storage model have been separately decided.
 
 ### Do Not Decide in Advance
 
-- The Stage 2 RabbitMQ message shape: a complete raw NDJSON batch versus a reference
-  to separately stored raw data.
 - Request and message-size limits, compression, exchange and queue topology,
   routing-key conventions, acknowledgement/requeue behavior, retry policy,
   dead-letter queues, delivery guarantees, and deployment topology.
