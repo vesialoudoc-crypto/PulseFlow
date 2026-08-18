@@ -172,17 +172,23 @@ complete request body as raw bytes and passes those bytes to
 `IIngestionBatchPublisher`; it does not invoke `NdjsonRecordReader`,
 `EventEnvelopeValidator`, `IngestEventsHandler`, or PostgreSQL persistence.
 
-The singleton `RabbitMqIngestionBatchPublisher` lazily creates and then owns one
-long-lived RabbitMQ connection and one channel. It declares the configured durable
-named queue and publishes to it through RabbitMQ's default exchange. The channel has
-publisher confirmations enabled and the publisher awaits `BasicPublishAsync`.
-Publication operations are serialized because concurrent operations on a shared
-RabbitMQ channel are unsafe. The client library's automatic recovery is explicitly
-disabled: a connection or channel failure propagates to the HTTP exception boundary;
-this slice does not add retry or reconnection behavior. This is the local, minimum
+The singleton `RabbitMqIngestionBatchPublisher` owns only the application-level batch
+publication boundary. It forwards the exact raw body to the singleton
+`IRabbitMqPublisherChannelProvider` without exposing RabbitMQ channel details to the
+HTTP-facing publisher.
+
+`RabbitMqPublisherChannelProvider` owns the RabbitMQ publishing resources. It lazily
+creates and retains one long-lived connection and one publisher-confirmation-enabled
+channel, declares the configured durable named queue, serializes channel use because
+concurrent operations on a shared channel are unsafe, and disposes the owned channel
+and connection during application shutdown. Its small RabbitMQ-specific
+`PublishAsync` operation sets persistent `application/x-ndjson` message properties
+and publishes to the configured queue through RabbitMQ's default exchange. It leaves
+the RabbitMQ client's automatic recovery at its default enabled setting; this cleanup
+adds no custom retry or reconnection behavior. A failed publication still faults the
+publisher task and reaches the HTTP exception boundary. This is the local, minimum
 Step 2 topology and lifecycle choice rather than a final topology or delivery
-guarantee. The message content type is `application/x-ndjson` and its body is the
-exact byte sequence received by the HTTP endpoint.
+guarantee.
 
 HTTP `202 Accepted` with no body is returned only after that publisher task completes
 successfully. Consequently, it means RabbitMQ confirmed publication of the raw batch,
@@ -200,6 +206,10 @@ EventsController
 IIngestionBatchPublisher (singleton)
     ↓
 RabbitMqIngestionBatchPublisher
+    ↓
+IRabbitMqPublisherChannelProvider (singleton)
+    ↓
+RabbitMqPublisherChannelProvider
     ↓
 RabbitMQ
 ```

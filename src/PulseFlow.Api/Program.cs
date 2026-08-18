@@ -47,10 +47,14 @@ builder.Services.AddSingleton<EventEnvelopeValidator>();
 
 builder.Services.AddScoped<IEventChunkStore, EfCoreEventChunkStore>();
 
-builder.Services.AddSingleton<IIngestionBatchPublisher>(services =>
-    new RabbitMqIngestionBatchPublisher(
+builder.Services.AddSingleton<IRabbitMqPublisherChannelProvider>(services =>
+    new RabbitMqPublisherChannelProvider(
         rabbitMqConnectionString,
         services.GetRequiredService<IOptions<RabbitMqOptions>>().Value));
+
+builder.Services.AddSingleton<IIngestionBatchPublisher>(services =>
+    new RabbitMqIngestionBatchPublisher(
+        services.GetRequiredService<IRabbitMqPublisherChannelProvider>()));
 
 builder.Services.AddScoped<IngestEventsHandler>(services =>
 {
