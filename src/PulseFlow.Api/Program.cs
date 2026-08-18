@@ -96,11 +96,20 @@ builder.Services.AddScoped<IEventChunkStore, EfCoreEventChunkStore>();
 if (rabbitMqChannel is not null)
 {
     builder.Services.AddSingleton<IChannel>(rabbitMqChannel);
+    builder.Services.AddSingleton<IConnection>(rabbitMqConnection!);
 
     builder.Services.AddSingleton<IIngestionBatchPublisher>(services =>
         new RabbitMqIngestionBatchPublisher(
             services.GetRequiredService<IChannel>(),
             rabbitMqOptions));
+
+    // The consumer shares the connection but owns a different channel.
+    builder.Services.AddSingleton<IRabbitMqConsumerChannel>(services =>
+        new RabbitMqConsumerChannel(
+            services.GetRequiredService<IConnection>(),
+            rabbitMqOptions));
+
+    builder.Services.AddHostedService<EventParserConsumer>();
 }
 
 builder.Services.AddScoped<IngestEventsHandler>(services =>

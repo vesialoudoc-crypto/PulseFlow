@@ -116,6 +116,16 @@ increase parsing capacity independently of the API. The accepted RabbitMQ decisi
 the limits of the initial semantics are documented. A public batch-status endpoint is
 not required until its contract and storage model have been separately decided.
 
+### Current implementation
+
+Steps 1 through 3 of PLAN 003 are implemented. `PulseFlow.Api` publishes the complete
+raw NDJSON body and returns HTTP 202 only after RabbitMQ confirms publication.
+`EventParserConsumer` runs as a hosted service, consumes the configured durable queue
+on a separate channel, reuses the Stage 1 parsing/validation/chunked-persistence path,
+and acknowledges a delivery only after that handler succeeds. PLAN 003 Steps 4 and 5
+remain required before Stage 2 can be completed; retry, dead-letter, requeue, Outbox,
+idempotency, delivery guarantees, and batch status remain intentionally unresolved.
+
 ### Do Not Decide in Advance
 
 - Request and message-size limits, compression, exchange and queue topology,

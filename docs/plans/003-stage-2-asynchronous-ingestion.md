@@ -160,7 +160,7 @@ that remains valid behind the RabbitMQ boundary.
 
 ### Step 3: Add `EventParserConsumer` using the existing parsing, validation, and persistence boundaries
 
-**Implementation status:** Not started.
+**Implementation status:** Completed on 2026-08-18.
 
 #### Responsibility introduced
 

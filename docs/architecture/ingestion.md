@@ -1,6 +1,6 @@
 # Ingestion Architecture
 
-**Status:** Stage 2 API-to-RabbitMQ acceptance boundary implemented; parser consumer deferred
+**Status:** Stage 2 API-to-RabbitMQ acceptance boundary and parser consumer implemented; complete-path verification and capacity configuration deferred
 
 ## Event record
 
@@ -24,9 +24,9 @@ The implemented persistence boundary accepts one already-formed collection of va
 separate `EventRecord` representation and persists them through the existing
 `PulseFlowDbContext`. The handler validates parsed records, forms and stores ordered
 chunks, and returns normal-completion accounting. These retained Stage 1 components
-are no longer in the HTTP request path; they are intended for Step 3 consumer reuse.
-The earlier Stage 1 HTTP-to-PostgreSQL verification remains historical evidence of
-their behavior, not the behavior of the current endpoint.
+are no longer in the HTTP request path; `EventParserConsumer` now reuses them for
+RabbitMQ deliveries. The earlier Stage 1 HTTP-to-PostgreSQL verification remains
+historical evidence of their behavior, not the behavior of the current endpoint.
 
 ## Batch transport
 
@@ -213,8 +213,8 @@ RabbitMQ
 RabbitMQ connection string is `ConnectionStrings:RabbitMq`, which deployments can
 override using `ConnectionStrings__RabbitMq`; no real credential is stored in
 repository configuration. The existing PostgreSQL composition and reusable Stage 1
-parsing, validation, and persistence services remain present for Step 3 reuse but are
-not in the HTTP request path.
+parsing, validation, and persistence services are not in the HTTP request path. They
+are resolved and used by the parser consumer per RabbitMQ delivery.
 
 `GlobalExceptionHandler` is registered through ASP.NET Core exception-handler
 middleware with Problem Details. Status-code pages provide Problem Details for
@@ -222,9 +222,9 @@ otherwise body-less error statuses. First-party ASP.NET Core OpenAPI generation
 documents the route, streaming NDJSON request body, and 202, 415, and 500 responses.
 Swagger UI points to the generated document in Development only.
 
-## Stage 2 boundary and deferred consumer
+## Stage 2 parser consumer
 
-The implemented Step 2 boundary is:
+The implemented asynchronous path is:
 
 ```text
 Client
@@ -232,16 +232,42 @@ Client
 PulseFlow.Api
     ↓
 RabbitMQ
+    ->
+EventParserConsumer
+    ->
+NDJSON parsing
+    ->
+Event Contract v1 validation
+    ->
+PostgreSQL
 ```
 
-This implements the API side of the boundary accepted by
+This implements Steps 2 and 3 of the boundary accepted by
 [ADR 0008](../decisions/0008-use-rabbitmq-to-decouple-http-ingestion-from-parsing.md)
 and [ADR 0009](../decisions/0009-define-stage-2-rabbitmq-batch-acceptance-boundary.md).
 
-`EventParserConsumer` is deliberately not implemented. The later Step 3 path remains
-`RabbitMQ -> EventParserConsumer -> NDJSON parsing -> Event Contract v1 validation ->
-PostgreSQL`, reusing the retained Stage 1 components where appropriate. No part of
-that consumer path is claimed by this Step 2 implementation.
+`EventParserConsumer` is an ASP.NET Core hosted `BackgroundService`. It receives
+deliveries through its own long-lived RabbitMQ channel created from the application's
+long-lived connection; it does not share the publisher channel. The channel consumes
+the configured durable queue with manual acknowledgement and copies the RabbitMQ body
+before processing because RabbitMQ.Client only guarantees the delivered memory during
+the callback.
+
+For each delivery, the consumer creates an asynchronous DI scope, resolves the scoped
+`IngestEventsHandler` and its EF Core persistence dependencies from that scope, exposes
+the copied raw batch through a `MemoryStream`, and passes it to the singleton
+`NdjsonRecordReader`. The handler retains the established Stage 1 validation,
+chunking, and persistence semantics. The consumer acknowledges the delivery only
+after the handler completes successfully.
+
+If normal processing fails, the consumer logs the exception and deliberately sends no
+successful acknowledgement, reject, or negative acknowledgement. The delivery stays
+unacknowledged for the current channel. This is a deliberately minimal Step 3 failure
+behavior, not a retry, requeue, dead-letter, poison-message, or delivery-guarantee
+policy. Shutdown cancellation is passed to RabbitMQ consumption where supported, the
+reader, and the handler; it is not logged as a processing failure. On hosted-service
+shutdown, consumption is cancelled and the consumer-owned channel is disposed before
+application composition disposes the shared RabbitMQ connection.
 
 ## Not yet defined
 
@@ -250,9 +276,9 @@ that consumer path is claimed by this Step 2 implementation.
 - authentication and authorization;
 - idempotency, deduplication, and client retry behavior;
 - request, batch, and RabbitMQ message-size limits;
-- RabbitMQ routing-key conventions beyond the direct configured-queue publish,
-  acknowledgement/requeue semantics, retry policy, dead-letter queues, and delivery
-  guarantees;
+- RabbitMQ routing-key conventions beyond the direct configured-queue publish;
+- acknowledgement/requeue semantics beyond successful manual acknowledgement, retry
+  policy, dead-letter queues, poison-message handling, and delivery guarantees;
 - batch-status persistence and public status/query endpoint contract;
 - deployment topology for RabbitMQ and parser consumers;
 - a measured and tuned chunk capacity;
