@@ -18,6 +18,13 @@ public sealed class RabbitMqConsumerChannel : IRabbitMqConsumerChannel
         _options = options;
     }
 
+    // These views let integration tests check ownership without creating another connection.
+    internal IConnection Connection => _connection;
+
+    internal IChannel? Channel => _channel;
+
+    internal string QueueName => _options.QueueName;
+
     public async Task StartConsumingAsync(
         Func<RabbitMqDelivery, CancellationToken, Task> deliveryHandler,
         CancellationToken cancellationToken)

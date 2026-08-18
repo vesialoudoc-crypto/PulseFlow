@@ -23,6 +23,8 @@ public sealed class EventParserConsumer : BackgroundService
         _logger = logger;
     }
 
+    internal IRabbitMqConsumerChannel ConsumerChannel => _consumerChannel;
+
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         try

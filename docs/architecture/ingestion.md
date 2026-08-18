@@ -1,6 +1,6 @@
 # Ingestion Architecture
 
-**Status:** Stage 2 API-to-RabbitMQ acceptance boundary and parser consumer implemented; complete-path verification and capacity configuration deferred
+**Status:** Stage 2 API-to-RabbitMQ acceptance boundary, parser consumer, real-broker verification, and parser-consumer capacity configuration implemented; review remains
 
 ## Event record
 
@@ -212,9 +212,12 @@ RabbitMQ
 `RabbitMqOptions` validates the required `RabbitMq:QueueName` on startup. The required
 RabbitMQ connection string is `ConnectionStrings:RabbitMq`, which deployments can
 override using `ConnectionStrings__RabbitMq`; no real credential is stored in
-repository configuration. The existing PostgreSQL composition and reusable Stage 1
-parsing, validation, and persistence services are not in the HTTP request path. They
-are resolved and used by the parser consumer per RabbitMQ delivery.
+repository configuration. `RabbitMq:ConsumerCount` defaults to 1 and is validated as
+greater than zero. It controls the number of competing `EventParserConsumer` instances
+inside one application process; it does not control or imply the number of HTTP API
+instances. The existing PostgreSQL composition and reusable Stage 1 parsing,
+validation, and persistence services are not in the HTTP request path. They are
+resolved and used by the parser consumer per RabbitMQ delivery.
 
 `GlobalExceptionHandler` is registered through ASP.NET Core exception-handler
 middleware with Problem Details. Status-code pages provide Problem Details for
@@ -268,6 +271,23 @@ policy. Shutdown cancellation is passed to RabbitMQ consumption where supported,
 reader, and the handler; it is not logged as a processing failure. On hosted-service
 shutdown, consumption is cancelled and the consumer-owned channel is disposed before
 application composition disposes the shared RabbitMQ connection.
+
+Application composition registers one `EventParserConsumer` for each validated
+`RabbitMq:ConsumerCount` value. Each instance creates and owns an independent consumer
+channel, while all consumer channels and the publisher channel share the one application
+RabbitMQ connection. The consumers subscribe to the same configured queue, and RabbitMQ
+is responsible for distributing deliveries between these competing consumers. This is
+structural capacity configuration only; it does not establish throughput, fairness, or
+load-performance results.
+
+The complete path is verified in an integration test using real RabbitMQ and PostgreSQL
+Testcontainers. The test starts both containers, starts the real application with a
+generated isolated queue name, posts `application/x-ndjson` to `POST /api/events`,
+asserts HTTP 202, and polls PostgreSQL with a bounded 15-second timeout until the
+expected rows appear. A focused real-broker test also verifies that `ConsumerCount = 2`
+starts two parser consumers that use the same configured queue and connection but
+different consumer channels. These tests do not claim an ordering, distribution, or
+performance characteristic.
 
 ## Not yet defined
 

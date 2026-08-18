@@ -190,7 +190,7 @@ persisted-event semantics.
 
 ### Step 4: Prove the complete asynchronous path and independently configurable consumer capacity
 
-**Implementation status:** Not started.
+**Implementation status:** Completed on 2026-08-18.
 
 #### Responsibility introduced
 

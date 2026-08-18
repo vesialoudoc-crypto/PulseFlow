@@ -103,13 +103,18 @@ if (rabbitMqChannel is not null)
             services.GetRequiredService<IChannel>(),
             rabbitMqOptions));
 
-    // The consumer shares the connection but owns a different channel.
-    builder.Services.AddSingleton<IRabbitMqConsumerChannel>(services =>
-        new RabbitMqConsumerChannel(
-            services.GetRequiredService<IConnection>(),
-            rabbitMqOptions));
-
-    builder.Services.AddHostedService<EventParserConsumer>();
+    // Consumers need separate channels, but they all use the application's one connection.
+    for (var consumerIndex = 0; consumerIndex < rabbitMqOptions.ConsumerCount; consumerIndex++)
+    {
+        builder.Services.AddSingleton<IHostedService>(services =>
+            new EventParserConsumer(
+                new RabbitMqConsumerChannel(
+                    services.GetRequiredService<IConnection>(),
+                    rabbitMqOptions),
+                services.GetRequiredService<IServiceScopeFactory>(),
+                services.GetRequiredService<NdjsonRecordReader>(),
+                services.GetRequiredService<ILogger<EventParserConsumer>>()));
+    }
 }
 
 builder.Services.AddScoped<IngestEventsHandler>(services =>

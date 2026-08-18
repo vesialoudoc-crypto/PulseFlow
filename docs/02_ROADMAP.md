@@ -118,13 +118,17 @@ not required until its contract and storage model have been separately decided.
 
 ### Current implementation
 
-Steps 1 through 3 of PLAN 003 are implemented. `PulseFlow.Api` publishes the complete
+Steps 1 through 4 of PLAN 003 are implemented. `PulseFlow.Api` publishes the complete
 raw NDJSON body and returns HTTP 202 only after RabbitMQ confirms publication.
 `EventParserConsumer` runs as a hosted service, consumes the configured durable queue
 on a separate channel, reuses the Stage 1 parsing/validation/chunked-persistence path,
-and acknowledges a delivery only after that handler succeeds. PLAN 003 Steps 4 and 5
-remain required before Stage 2 can be completed; retry, dead-letter, requeue, Outbox,
-idempotency, delivery guarantees, and batch status remain intentionally unresolved.
+and acknowledges a delivery only after that handler succeeds. A real RabbitMQ and
+PostgreSQL Testcontainers test verifies the complete path. `RabbitMq:ConsumerCount`
+defaults to 1, is validated as positive, and registers that many competing parser
+consumers on separate channels of the shared application connection; it controls
+parser-consumer capacity, not HTTP API instance count. PLAN 003 Step 5 remains required
+before Stage 2 can be completed; retry, dead-letter, requeue, Outbox, idempotency,
+delivery guarantees, and batch status remain intentionally unresolved.
 
 ### Do Not Decide in Advance
 
