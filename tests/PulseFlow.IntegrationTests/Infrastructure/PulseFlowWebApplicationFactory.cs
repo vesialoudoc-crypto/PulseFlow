@@ -16,6 +16,8 @@ namespace PulseFlow.IntegrationTests.Infrastructure
 
         protected override IHost CreateHost(IHostBuilder builder)
         {
+            builder.UseEnvironment("Testing");
+
             builder.ConfigureHostConfiguration(config =>
             {
                 config.AddInMemoryCollection(

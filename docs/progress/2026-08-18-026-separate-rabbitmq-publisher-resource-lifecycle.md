@@ -4,35 +4,37 @@
 
 ## Starting point
 
-PLAN 003 Step 2 already reused one long-lived RabbitMQ connection and one shared
-channel, but `RabbitMqIngestionBatchPublisher` also owned their initialization,
-queue declaration, serialization, and disposal. That mixed resource lifecycle with
-the batch publishing operation.
+PLAN 003 Step 2 had a separate RabbitMQ publishing-resource provider in addition to
+`RabbitMqIngestionBatchPublisher`. For one publish operation, that additional layer
+obscured the direct publisher path without adding a required capability.
 
 ## What changed
 
-- Added `IRabbitMqPublisherChannelProvider` and its singleton
-  `RabbitMqPublisherChannelProvider` implementation.
-- Moved lazy connection/channel creation, publisher-confirmation channel setup,
-  durable queue declaration, serialization of shared-channel use, and asynchronous
-  disposal into that provider.
-- Simplified `RabbitMqIngestionBatchPublisher` to forward the raw ingestion batch to
-  the provider's small RabbitMQ-specific `PublishAsync` operation, without a generic
-  callback-based API.
+- Removed `IRabbitMqPublisherChannelProvider` and
+  `RabbitMqPublisherChannelProvider`.
+- Moved one-time RabbitMQ connection/channel initialization, publisher-confirmation
+  setup, and durable queue declaration into application composition before the host
+  starts accepting requests.
+- Registered the ready shared channel for the singleton publisher and registered
+  application-stop disposal for the owned channel and connection.
+- Simplified `RabbitMqIngestionBatchPublisher` to publish directly through its
+  injected channel, keeping only the semaphore required to serialize shared-channel
+  publication.
+- Configured the integration-test host to use the `Testing` environment. It replaces
+  the publisher in its HTTP-boundary tests, so RabbitMQ startup initialization is
+  intentionally skipped only for that test host.
 - Removed the explicit `AutomaticRecoveryEnabled = false` override. RabbitMQ.Client
   defaults automatic recovery to enabled; no custom retry or reconnection behavior
   was added.
-- Added a focused unit test for the publisher-to-provider responsibility boundary.
 - Updated the active ingestion architecture documentation.
 
 ## Resulting repository state
 
 The application still reuses one long-lived RabbitMQ connection and one shared
-publisher channel. The provider serializes access to that channel and disposes its
-owned resources during application shutdown. The publisher retains the exact raw
-NDJSON body and forwards it unchanged. The provider owns persistent message
-properties, default-exchange routing, mandatory publication, and publisher-confirmed
-completion semantics.
+publisher channel. Application composition owns startup initialization and shutdown
+disposal. `RabbitMqIngestionBatchPublisher` serializes access to the injected channel
+and owns raw NDJSON publication, persistent message properties, default-exchange
+routing, mandatory publication, and publisher-confirmed completion semantics.
 
 The HTTP contract is unchanged: `POST /api/events` returns HTTP `202 Accepted` only
 after confirmed publication completes successfully; publication failures continue to
@@ -52,7 +54,7 @@ pwsh ./scripts/check-project-docs.ps1
 Results:
 
 - Build succeeded with 0 warnings and 0 errors.
-- The solution tests passed: 98 passed, 0 failed, 0 skipped (65 unit and 33
+- The solution tests passed: 97 passed, 0 failed, 0 skipped (64 unit and 33
   integration tests).
 - `pwsh` was unavailable in the environment, so the same documentation-validation
   script was run with Windows PowerShell (`powershell -NoProfile -ExecutionPolicy

@@ -172,20 +172,19 @@ complete request body as raw bytes and passes those bytes to
 `IIngestionBatchPublisher`; it does not invoke `NdjsonRecordReader`,
 `EventEnvelopeValidator`, `IngestEventsHandler`, or PostgreSQL persistence.
 
-The singleton `RabbitMqIngestionBatchPublisher` owns only the application-level batch
-publication boundary. It forwards the exact raw body to the singleton
-`IRabbitMqPublisherChannelProvider` without exposing RabbitMQ channel details to the
-HTTP-facing publisher.
+Application composition validates the RabbitMQ options and creates one long-lived
+RabbitMQ connection and one publisher-confirmation-enabled channel during startup. It
+declares the configured durable named queue before the host starts accepting requests,
+registers the ready channel for application use, and disposes the channel and
+connection after the host stops. Startup fails if these RabbitMQ resources or the
+queue declaration cannot be initialized.
 
-`RabbitMqPublisherChannelProvider` owns the RabbitMQ publishing resources. It lazily
-creates and retains one long-lived connection and one publisher-confirmation-enabled
-channel, declares the configured durable named queue, serializes channel use because
-concurrent operations on a shared channel are unsafe, and disposes the owned channel
-and connection during application shutdown. Its small RabbitMQ-specific
-`PublishAsync` operation sets persistent `application/x-ndjson` message properties
-and publishes to the configured queue through RabbitMQ's default exchange. It leaves
-the RabbitMQ client's automatic recovery at its default enabled setting; this cleanup
-adds no custom retry or reconnection behavior. A failed publication still faults the
+The singleton `RabbitMqIngestionBatchPublisher` receives the ready shared channel and
+owns only batch publication. It serializes channel access with `SemaphoreSlim`, sets
+persistent `application/x-ndjson` message properties, and publishes the exact raw
+body to the configured queue through RabbitMQ's default exchange. The RabbitMQ
+client's automatic recovery remains at its default enabled setting; this cleanup adds
+no custom retry or reconnection behavior. A failed publication still faults the
 publisher task and reaches the HTTP exception boundary. This is the local, minimum
 Step 2 topology and lifecycle choice rather than a final topology or delivery
 guarantee.
@@ -206,10 +205,6 @@ EventsController
 IIngestionBatchPublisher (singleton)
     ↓
 RabbitMqIngestionBatchPublisher
-    ↓
-IRabbitMqPublisherChannelProvider (singleton)
-    ↓
-RabbitMqPublisherChannelProvider
     ↓
 RabbitMQ
 ```
