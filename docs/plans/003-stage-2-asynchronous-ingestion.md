@@ -63,8 +63,9 @@ to rewrite already proved rules.
   from RabbitMQ independently of API instances. This plan proves structural scaling
   capability, not a Stage 4 load-performance claim.
 - Do not choose reliability mechanisms early. Retries, dead-letter queues, delivery
-  guarantees, Outbox, idempotency, deduplication, and Redis remain outside the first
-  Stage 2 slice unless a bounded preceding decision makes one unavoidable.
+  guarantees, Outbox, idempotency, and deduplication remain outside the first Stage 2
+  slice unless a bounded preceding decision makes one unavoidable. Redis is deferred to
+  Stage 4 for distributed ingestion rate limiting across multiple API instances.
 - Use explicit constructors inside C# type bodies. Do not use C# primary constructors.
 
 ## Incremental implementation order
@@ -230,7 +231,8 @@ implementation step makes them necessary:
 - exchange/queue topology and routing-key conventions;
 - acknowledgement/requeue semantics, retries, dead-letter queues, and exact delivery
   guarantees;
-- Outbox, idempotency, deduplication, Redis, and batch-status persistence;
+- Outbox, idempotency, deduplication, and batch-status persistence; Redis rate-limiting
+  implementation is deferred to Stage 4;
 - public batch-status/query endpoint and response shape;
 - deployment topology and performance targets.
 

@@ -287,6 +287,8 @@ request. RabbitMQ and `EventParserConsumer` do not yet exist in the repository.
 - production migration execution;
 - the concrete validation library or framework.
 
-RabbitMQ is accepted as the Stage 2 work-transfer broker. Redis, Outbox, idempotency,
+RabbitMQ is accepted as the Stage 2 work-transfer broker. Redis is not part of the
+implemented or Stage 2 target architecture; it is reserved for Stage 4 distributed
+ingestion rate limiting across multiple `PulseFlow.Api` instances. Outbox, idempotency,
 deduplication, and the detailed RabbitMQ reliability and topology choices remain
 unresolved.

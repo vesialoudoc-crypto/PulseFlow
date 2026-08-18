@@ -79,7 +79,7 @@ From a clean environment, one can start the application and PostgreSQL, submit a
 
 ### Do Not Decide in Advance
 
-Do not treat the initial chunk capacity as tuned, or select RabbitMQ, Redis, polling, a queue or stream technology, delivery guarantees, idempotency semantics, an API query model, batch limits, compression, PostgreSQL retry behavior, transaction isolation level, multiple application instances, the final event schema, or the cloud topology before a separate decision establishes the need and criteria.
+Do not treat the initial chunk capacity as tuned, or select RabbitMQ, polling, a queue or stream technology, delivery guarantees, idempotency semantics, an API query model, batch limits, compression, PostgreSQL retry behavior, transaction isolation level, multiple application instances, the final event schema, or the cloud topology before a separate decision establishes the need and criteria. Redis is retained for the accepted future distributed ingestion rate-limiting use case, but its algorithm, quota values, window strategy, implementation, and failure behavior remain undecided.
 
 ## Stage 2: Asynchronous Processing
 
@@ -122,8 +122,10 @@ not required until its contract and storage model have been separately decided.
 - Request and message-size limits, compression, exchange and queue topology,
   routing-key conventions, acknowledgement/requeue behavior, retry policy,
   dead-letter queues, delivery guarantees, and deployment topology.
-- Outbox, idempotency, deduplication, Redis, batch-status persistence, and public
+- Outbox, idempotency, deduplication, batch-status persistence, and public
   status/query endpoints; these are not prerequisites for the first Stage 2 slice.
+  Redis implementation is deferred to Stage 4 for distributed ingestion rate limiting,
+  not for generic caching or batch-status storage.
 
 ## Stage 3: Reliability and Correctness During Failures
 
@@ -135,7 +137,6 @@ not required until its contract and storage model have been separately decided.
 - Introduce bounded retries and handling for unrecoverable messages.
 - Test partial failures between the main components.
 - Prevent silent data loss in the selected scenarios.
-- Evaluate the need for Redis or another supporting mechanism against a concrete problem.
 
 ### Learning Objectives
 
@@ -157,6 +158,10 @@ Automated or reproducible checks exist for a documented set of failures and repe
 
 - Run multiple instances of applicable components.
 - Verify distribution and concurrent-processing correctness.
+- Introduce Redis-backed distributed ingestion rate limiting so multiple
+  `PulseFlow.Api` instances share client quota state.
+- Reject an over-limit request with HTTP 429, with `Retry-After` where appropriate,
+  before it is published to RabbitMQ.
 - Create a reproducible load scenario.
 - Find and measure at least one real bottleneck.
 - Compare behavior before and after a justified improvement.
@@ -164,17 +169,19 @@ Automated or reproducible checks exist for a documented set of failures and repe
 ### Learning Objectives
 
 - Stateless design and coordination through external state.
+- Distributed quota counters and rate limiting across independently serving API
+  instances.
 - Parallelism limits, backpressure, and resource saturation.
 - Throughput, latency, errors, and percentile interpretation.
 - Connection pools, indexes, locks, and the database's impact on scaling.
 
 ### Expected Result
 
-The load test runs reproducibly and produces a clear report. The configuration, baseline metrics, identified constraint, change, and follow-up measurement are documented. Multiple instances work correctly in the tested scenarios, and the limits of the conclusions are stated explicitly.
+The load test runs reproducibly and produces a clear report. The configuration, baseline metrics, identified constraint, change, and follow-up measurement are documented. Multiple `PulseFlow.Api` instances share Redis-backed rate-limit/quota state: process-local in-memory counters are not used because they would be incorrect when requests are distributed across instances. Redis stores this fast-changing operational state only; it is not the primary event store, generic cache, or batch-status store. Requests exceeding the accepted quota receive HTTP 429 and are not published to RabbitMQ. Multiple instances work correctly in the tested scenarios, and the limits of the conclusions are stated explicitly.
 
 ### Do Not Decide in Advance
 
-The exact number of instances or target performance metrics before a baseline measurement exists.
+The exact number of instances or target performance metrics before a baseline measurement exists. The rate-limiting algorithm, quota values, time-window strategy, Redis command or script implementation, and Redis failure behavior remain Stage 4 decisions.
 
 ## Stage 5: Deployment to AWS
 
@@ -240,7 +247,9 @@ requirements and not claims about the currently implemented architecture:
 - rate limiting and request/input limits;
 - resilience and retry policies where concrete failure behavior justifies them;
 - idempotency and deduplication;
-- caching or Redis only when a concrete read/query use case justifies caching;
+- Redis-backed distributed ingestion rate limiting when Stage 4 introduces multiple
+  `PulseFlow.Api` instances; Redis is not planned as generic caching or batch-status
+  storage;
 - asynchronous/background processing and messaging when Stage 2 requires them;
 - load testing and multi-instance behavior;
 - graceful shutdown and operational behavior;

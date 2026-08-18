@@ -72,7 +72,7 @@ Local execution, testing, and deployment must be documented and automated where 
 - data validation, error handling, and clear result states;
 - investigation of repetition, idempotency, concurrency, and partial failures;
 - load testing and horizontal scaling;
-- justified investigation of Redis and a queue technology;
+- distributed rate limiting and a queue technology;
 - deployment to AWS;
 - CI/CD;
 - observability, operational checks, and production hardening;
@@ -105,7 +105,8 @@ Local execution, testing, and deployment must be documented and automated where 
 - the exact data model and migration strategy;
 - the boundary between synchronous and asynchronous work;
 - the queue technology and delivery guarantees;
-- whether Redis is needed and what role it would serve;
+- the limiting algorithm, quota values, window strategy, Redis implementation, and
+  failure behavior for distributed ingestion rate limiting;
 - the client identity and access-control model;
 - the specific AWS services and network topology;
 - the number and size of instances;
