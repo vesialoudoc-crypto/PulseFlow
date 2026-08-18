@@ -1,6 +1,6 @@
 # Ingestion Architecture
 
-**Status:** Implemented Stage 1 architecture
+**Status:** Implemented Stage 1 architecture; accepted Stage 2 target recorded below
 
 ## Event record
 
@@ -215,17 +215,78 @@ otherwise body-less error statuses. First-party ASP.NET Core OpenAPI generation
 documents the route, streaming NDJSON request body, and 200, 415, and 500 responses.
 Swagger UI points to the generated document in Development only.
 
+## Accepted Stage 2 target architecture (not implemented)
+
+Stage 1 currently performs the complete ingestion pipeline during the HTTP request:
+
+```text
+HTTP -> parse -> validate -> PostgreSQL
+```
+
+For the many-client ingestion scenario, [ADR 0008](../decisions/0008-use-rabbitmq-to-decouple-http-ingestion-from-parsing.md)
+accepts a different Stage 2 boundary. RabbitMQ buffers accepted batch work and
+decouples HTTP ingestion throughput from the throughput of parsing and validation.
+The accepted target is:
+
+```text
+Client
+    ↓
+PulseFlow.Api
+    ↓
+RabbitMQ
+    ↓
+EventParserConsumer
+    ↓
+NDJSON parsing
+    ↓
+Event Contract v1 validation
+    ↓
+PostgreSQL
+```
+
+`PulseFlow.Api` remains the HTTP ingestion boundary. For the asynchronous path it
+receives an NDJSON batch, performs only the request-level checks required before
+acceptance, publishes the batch for asynchronous work, and acknowledges that
+acceptance. It must not parse individual NDJSON records or apply Event Contract v1
+validation before publishing the batch. The Stage 1 synchronous `200` result with
+`total`, `accepted`, and `rejected` therefore is not the final Stage 2 response
+contract; asynchronous acknowledgement is expected to use a semantics such as HTTP
+`202 Accepted`, but its final response body has not been decided.
+
+`EventParserConsumer` is the concrete asynchronous component. It receives an NDJSON
+batch from RabbitMQ, parses its records, applies the existing Event Contract v1
+validation rules, and persists valid events to PostgreSQL through an appropriate
+persistence boundary. The existing Stage 1 reader, validator, envelope, and
+persistence logic are expected to be reused or repositioned where their contracts
+remain suitable; moving the execution boundary alone is not a reason to rewrite them.
+Multiple `EventParserConsumer` instances must be possible so parsing and validation
+capacity can scale independently from `PulseFlow.Api`. This is not an artificial
+business-processing worker and does not add a service merely to increase component
+count.
+
+This is an accepted target, not implemented architecture. The current API continues
+to parse, validate, persist, and return synchronous Stage 1 accounting during the HTTP
+request. RabbitMQ and `EventParserConsumer` do not yet exist in the repository.
+
 ## Not yet defined
 
 - record, upload, and record-count limits;
 - compression;
 - authentication and authorization;
 - idempotency, deduplication, and client retry behavior;
-- downstream processing-transfer technology;
+- whether a RabbitMQ message carries the complete raw NDJSON batch or a reference to
+  separately stored raw data;
+- request, batch, and RabbitMQ message-size limits;
+- RabbitMQ exchange/queue topology, routing-key conventions, acknowledgement/requeue
+  semantics, retry policy, dead-letter queues, and delivery guarantees;
+- batch-status persistence and public status/query endpoint contract;
+- deployment topology for RabbitMQ and parser consumers;
 - a measured and tuned chunk capacity;
 - retry and idempotency behavior for an overall failure after earlier chunks committed;
 - PostgreSQL retry strategy, EF Core execution strategy, and transaction isolation level;
 - production migration execution;
 - the concrete validation library or framework.
 
-RabbitMQ, Redis, polling, and queue or stream technologies are not accepted parts of the architecture at this point.
+RabbitMQ is accepted as the Stage 2 work-transfer broker. Redis, Outbox, idempotency,
+deduplication, and the detailed RabbitMQ reliability and topology choices remain
+unresolved.

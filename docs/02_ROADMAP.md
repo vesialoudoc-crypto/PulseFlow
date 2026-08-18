@@ -87,25 +87,43 @@ Do not treat the initial chunk capacity as tuned, or select RabbitMQ, Redis, pol
 
 ### Goals
 
-- Separate data ingestion from at least one processing step.
-- Define the lifecycle of an accepted event and its available states.
-- Choose a work-transfer mechanism using explicit criteria.
-- Implement background processing and a way to observe its result.
+- Decouple HTTP batch ingestion from NDJSON parsing and Event Contract v1 validation
+  for the many-client ingestion scenario.
+- Use RabbitMQ as the Stage 2 work-transfer broker between `PulseFlow.Api` and
+  `EventParserConsumer` instances.
+- Move NDJSON parsing, Event Contract v1 validation, and persistence behind the
+  asynchronous boundary.
+- Establish a minimal verifiable asynchronous path in which parser-consumer capacity
+  can be increased independently from API capacity.
 
 ### Learning Objectives
 
-- Boundaries between synchronous and asynchronous work.
-- Message-delivery models and their trade-offs.
-- Background processes, parallelism control, and graceful shutdown.
-- Coordination of state between storage and the processor.
+- Boundaries between HTTP acceptance and asynchronous parsing, validation, and
+  persistence.
+- RabbitMQ work transfer and the limits of the selected initial semantics.
+- Consumer ownership, independently scalable parser capacity, and graceful shutdown.
+- Coordination between the API, broker, parser consumer, and PostgreSQL.
 
 ### Expected Result
 
-Within the chosen semantics, the API acknowledges ingestion independently of how long subsequent processing takes. A processor performs the work and saves the result, and the event state can be inspected. The choice of work-transfer mechanism and its limitations are documented.
+`PulseFlow.Api` accepts an NDJSON batch without parsing individual records or applying
+Event Contract v1 validation, publishes accepted work to RabbitMQ, and acknowledges
+asynchronous acceptance. `EventParserConsumer` receives the batch, performs NDJSON
+parsing and Event Contract v1 validation, and persists valid events through an
+appropriate boundary to PostgreSQL. Multiple parser consumers can be introduced to
+increase parsing capacity independently of the API. The accepted RabbitMQ decision and
+the limits of the initial semantics are documented. A public batch-status endpoint is
+not required until its contract and storage model have been separately decided.
 
 ### Do Not Decide in Advance
 
-A specific queue technology before requirements for local development, delivery, cost, AWS deployment, and resilience have been defined.
+- The Stage 2 RabbitMQ message shape: a complete raw NDJSON batch versus a reference
+  to separately stored raw data.
+- Request and message-size limits, compression, exchange and queue topology,
+  routing-key conventions, acknowledgement/requeue behavior, retry policy,
+  dead-letter queues, delivery guarantees, and deployment topology.
+- Outbox, idempotency, deduplication, Redis, batch-status persistence, and public
+  status/query endpoints; these are not prerequisites for the first Stage 2 slice.
 
 ## Stage 3: Reliability and Correctness During Failures
 
