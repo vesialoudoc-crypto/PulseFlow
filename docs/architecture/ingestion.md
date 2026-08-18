@@ -1,6 +1,6 @@
 # Ingestion Architecture
 
-**Status:** Implemented Stage 1 architecture; accepted Stage 2 target recorded below
+**Status:** Stage 2 API-to-RabbitMQ acceptance boundary implemented; parser consumer deferred
 
 ## Event record
 
@@ -23,11 +23,10 @@ The implemented persistence boundary accepts one already-formed collection of va
 `EventEnvelope` values. Its EF Core implementation translates them directly to the
 separate `EventRecord` representation and persists them through the existing
 `PulseFlowDbContext`. The handler validates parsed records, forms and stores ordered
-chunks, and returns normal-completion accounting. The controller and application
-composition expose this flow over HTTP and wire it to PostgreSQL. Step 6 verifies the
-real hosted HTTP-to-PostgreSQL path, including normal accounting, independent
-malformed/contract-invalid records, full plus final partial chunks, and a later
-persistence failure after an earlier real PostgreSQL commit.
+chunks, and returns normal-completion accounting. These retained Stage 1 components
+are no longer in the HTTP request path; they are intended for Step 3 consumer reuse.
+The earlier Stage 1 HTTP-to-PostgreSQL verification remains historical evidence of
+their behavior, not the behavior of the current endpoint.
 
 ## Batch transport
 
@@ -168,21 +167,28 @@ The generation decision is recorded in
 ## HTTP and application composition
 
 The implemented public boundary is `POST /api/events`, exposed by an ASP.NET Core
-controller and restricted to `application/x-ndjson`. `EventsController` passes
-`Request.Body` to `NdjsonRecordReader`, passes the resulting asynchronous sequence to
-`IngestEventsHandler`, supplies request cancellation to both, and returns the handler
-result. It contains no JSON parsing, Event Contract validation, chunk formation,
-database access, persistence exception handling, or persistence logic.
+controller and restricted to `application/x-ndjson`. The controller copies the
+complete request body as raw bytes and passes those bytes to
+`IIngestionBatchPublisher`; it does not invoke `NdjsonRecordReader`,
+`EventEnvelopeValidator`, `IngestEventsHandler`, or PostgreSQL persistence.
 
-Normal completion returns HTTP 200 with camel-case JSON containing `total`,
-`accepted`, and derived `rejected`. This includes empty input and normally processed
-input for which every record is rejected. Unsupported media types return HTTP 415.
-Persistence or other unhandled failures are handled centrally as HTTP 500 Problem
-Details. The safe response includes `HttpContext.TraceIdentifier` as `traceId` and
-does not expose exception messages, stack traces, SQL details, or partial accounting.
-The exception is logged, and previously committed chunks may remain durable. These
-HTTP decisions are recorded in
-[ADR 0007](../decisions/0007-expose-controller-based-ndjson-ingestion-api.md).
+The singleton `RabbitMqIngestionBatchPublisher` lazily creates and then owns one
+long-lived RabbitMQ connection and one channel. It declares the configured durable
+named queue and publishes to it through RabbitMQ's default exchange. The channel has
+publisher confirmations enabled and the publisher awaits `BasicPublishAsync`.
+Publication operations are serialized because concurrent operations on a shared
+RabbitMQ channel are unsafe. The client library's automatic recovery is explicitly
+disabled: a connection or channel failure propagates to the HTTP exception boundary;
+this slice does not add retry or reconnection behavior. This is the local, minimum
+Step 2 topology and lifecycle choice rather than a final topology or delivery
+guarantee. The message content type is `application/x-ndjson` and its body is the
+exact byte sequence received by the HTTP endpoint.
+
+HTTP `202 Accepted` with no body is returned only after that publisher task completes
+successfully. Consequently, it means RabbitMQ confirmed publication of the raw batch,
+not that any record was parsed, validated, or persisted. Unsupported media types
+return HTTP 415. Publisher and other unhandled failures continue to use the existing
+centralized HTTP 500 Problem Details boundary, with no `202` response.
 
 The implemented dependency graph and lifetimes are:
 
@@ -191,42 +197,29 @@ HTTP
     ↓
 EventsController
     ↓
-NdjsonRecordReader (singleton)
+IIngestionBatchPublisher (singleton)
     ↓
-IngestEventsHandler (scoped)
-    ├── EventEnvelopeValidator (singleton)
-    └── IEventChunkStore (scoped)
-            ↓
-        EfCoreEventChunkStore
-            ↓
-        PulseFlowDbContext (scoped)
-            ↓
-        PostgreSQL
+RabbitMqIngestionBatchPublisher
+    ↓
+RabbitMQ
 ```
 
-`PulseFlowDbContext` uses Npgsql with the required
-`ConnectionStrings:PulseFlow` connection string. Deployments can supply it through
-the `ConnectionStrings__PulseFlow` environment variable; no real credential is stored
-in repository configuration. Application startup does not execute migrations.
+`RabbitMqOptions` validates the required `RabbitMq:QueueName` on startup. The required
+RabbitMQ connection string is `ConnectionStrings:RabbitMq`, which deployments can
+override using `ConnectionStrings__RabbitMq`; no real credential is stored in
+repository configuration. The existing PostgreSQL composition and reusable Stage 1
+parsing, validation, and persistence services remain present for Step 3 reuse but are
+not in the HTTP request path.
 
 `GlobalExceptionHandler` is registered through ASP.NET Core exception-handler
 middleware with Problem Details. Status-code pages provide Problem Details for
 otherwise body-less error statuses. First-party ASP.NET Core OpenAPI generation
-documents the route, streaming NDJSON request body, and 200, 415, and 500 responses.
+documents the route, streaming NDJSON request body, and 202, 415, and 500 responses.
 Swagger UI points to the generated document in Development only.
 
-## Accepted Stage 2 target architecture (not implemented)
+## Stage 2 boundary and deferred consumer
 
-Stage 1 currently performs the complete ingestion pipeline during the HTTP request:
-
-```text
-HTTP -> parse -> validate -> PostgreSQL
-```
-
-For the many-client ingestion scenario, [ADR 0008](../decisions/0008-use-rabbitmq-to-decouple-http-ingestion-from-parsing.md)
-accepts a different Stage 2 boundary. RabbitMQ buffers accepted batch work and
-decouples HTTP ingestion throughput from the throughput of parsing and validation.
-The accepted target is:
+The implemented Step 2 boundary is:
 
 ```text
 Client
@@ -234,47 +227,16 @@ Client
 PulseFlow.Api
     ↓
 RabbitMQ
-    ↓
-EventParserConsumer
-    ↓
-NDJSON parsing
-    ↓
-Event Contract v1 validation
-    ↓
-PostgreSQL
 ```
 
-`PulseFlow.Api` remains the HTTP ingestion boundary. For the first Stage 2 slice, it
-receives an NDJSON batch, performs only the request-level checks required before
-acceptance, and publishes the complete raw NDJSON batch body to RabbitMQ. It does not
-use external raw-batch storage or publish only a reference or identifier. It must not
-parse individual NDJSON records or apply Event Contract v1 validation before
-publishing the batch.
+This implements the API side of the boundary accepted by
+[ADR 0008](../decisions/0008-use-rabbitmq-to-decouple-http-ingestion-from-parsing.md)
+and [ADR 0009](../decisions/0009-define-stage-2-rabbitmq-batch-acceptance-boundary.md).
 
-RabbitMQ publication confirmation is the Stage 2 HTTP acceptance boundary. The API
-returns HTTP `202 Accepted` only after RabbitMQ has confirmed successful publication
-of the batch; a publication failure must not return `202 Accepted`. The exact failure
-response is not further defined by this decision and continues to use the existing
-centralized error-handling boundary until a later implementation step needs more
-specific behavior. The Stage 1 synchronous `200` result with `total`, `accepted`,
-and `rejected` is therefore not the Stage 2 response contract, and the exact `202`
-response body remains undecided. These decisions are recorded in
-[ADR 0009](../decisions/0009-define-stage-2-rabbitmq-batch-acceptance-boundary.md).
-
-`EventParserConsumer` is the concrete asynchronous component. It receives an NDJSON
-batch from RabbitMQ, parses its records, applies the existing Event Contract v1
-validation rules, and persists valid events to PostgreSQL through an appropriate
-persistence boundary. The existing Stage 1 reader, validator, envelope, and
-persistence logic are expected to be reused or repositioned where their contracts
-remain suitable; moving the execution boundary alone is not a reason to rewrite them.
-Multiple `EventParserConsumer` instances must be possible so parsing and validation
-capacity can scale independently from `PulseFlow.Api`. This is not an artificial
-business-processing worker and does not add a service merely to increase component
-count.
-
-This is an accepted target, not implemented architecture. The current API continues
-to parse, validate, persist, and return synchronous Stage 1 accounting during the HTTP
-request. RabbitMQ and `EventParserConsumer` do not yet exist in the repository.
+`EventParserConsumer` is deliberately not implemented. The later Step 3 path remains
+`RabbitMQ -> EventParserConsumer -> NDJSON parsing -> Event Contract v1 validation ->
+PostgreSQL`, reusing the retained Stage 1 components where appropriate. No part of
+that consumer path is claimed by this Step 2 implementation.
 
 ## Not yet defined
 
@@ -283,8 +245,9 @@ request. RabbitMQ and `EventParserConsumer` do not yet exist in the repository.
 - authentication and authorization;
 - idempotency, deduplication, and client retry behavior;
 - request, batch, and RabbitMQ message-size limits;
-- RabbitMQ exchange/queue topology, routing-key conventions, acknowledgement/requeue
-  semantics, retry policy, dead-letter queues, and delivery guarantees;
+- RabbitMQ routing-key conventions beyond the direct configured-queue publish,
+  acknowledgement/requeue semantics, retry policy, dead-letter queues, and delivery
+  guarantees;
 - batch-status persistence and public status/query endpoint contract;
 - deployment topology for RabbitMQ and parser consumers;
 - a measured and tuned chunk capacity;
@@ -293,8 +256,7 @@ request. RabbitMQ and `EventParserConsumer` do not yet exist in the repository.
 - production migration execution;
 - the concrete validation library or framework.
 
-RabbitMQ is accepted as the Stage 2 work-transfer broker. Redis is not part of the
-implemented or Stage 2 target architecture; it is reserved for Stage 4 distributed
-ingestion rate limiting across multiple `PulseFlow.Api` instances. Outbox, idempotency,
-deduplication, and the detailed RabbitMQ reliability and topology choices remain
+Redis is not part of this implementation; it is reserved for Stage 4 distributed
+ingestion rate limiting across multiple `PulseFlow.Api` instances. Outbox,
+idempotency, deduplication, and detailed RabbitMQ reliability choices remain
 unresolved.

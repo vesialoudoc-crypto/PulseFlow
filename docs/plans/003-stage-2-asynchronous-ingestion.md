@@ -126,7 +126,7 @@ The rationale and consequences are recorded in
 
 ### Step 2: Add the API-to-RabbitMQ asynchronous acceptance slice
 
-**Implementation status:** Not started.
+**Implementation status:** Completed on 2026-08-18.
 
 #### Responsibility introduced
 

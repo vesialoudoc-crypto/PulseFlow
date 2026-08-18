@@ -22,6 +22,8 @@ namespace PulseFlow.IntegrationTests.Infrastructure
                     new Dictionary<string, string?>
                     {
                         ["ConnectionStrings:PulseFlow"] = _connectionString,
+                        ["ConnectionStrings:RabbitMq"] = "amqp://guest:guest@localhost:5672/",
+                        ["RabbitMq:QueueName"] = "pulseflow.integration-tests",
                         ["Ingestion:ChunkCapacity"] = "2"
                     });
             });

@@ -83,7 +83,7 @@ Do not treat the initial chunk capacity as tuned, or select RabbitMQ, polling, a
 
 ## Stage 2: Asynchronous Processing
 
-**Status:** Not started
+**Status:** In progress
 
 ### Goals
 

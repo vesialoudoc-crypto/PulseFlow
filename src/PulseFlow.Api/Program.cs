@@ -3,6 +3,7 @@ using Microsoft.Extensions.Options;
 using Microsoft.OpenApi;
 using PulseFlow.Api.Http;
 using PulseFlow.Api.Ingestion;
+using PulseFlow.Api.Ingestion.Messaging;
 using PulseFlow.Api.Ingestion.Ndjson;
 using PulseFlow.Api.Ingestion.Persistence;
 using PulseFlow.Api.Ingestion.Validation;
@@ -16,6 +17,11 @@ var connectionString =
     ?? throw new InvalidOperationException(
         "Connection string 'PulseFlow' is required.");
 
+var rabbitMqConnectionString =
+    builder.Configuration.GetConnectionString("RabbitMq")
+    ?? throw new InvalidOperationException(
+        "Connection string 'RabbitMq' is required.");
+
 builder.Services.AddControllers();
 
 builder.Services.AddProblemDetails();
@@ -27,6 +33,12 @@ builder.Services
     .ValidateDataAnnotations()
     .ValidateOnStart();
 
+builder.Services
+    .AddOptions<RabbitMqOptions>()
+    .Bind(builder.Configuration.GetSection(RabbitMqOptions.SectionName))
+    .ValidateDataAnnotations()
+    .ValidateOnStart();
+
 builder.Services.AddDbContext<PulseFlowDbContext>(
     options => options.UseNpgsql(connectionString));
 
@@ -34,6 +46,11 @@ builder.Services.AddSingleton<NdjsonRecordReader>();
 builder.Services.AddSingleton<EventEnvelopeValidator>();
 
 builder.Services.AddScoped<IEventChunkStore, EfCoreEventChunkStore>();
+
+builder.Services.AddSingleton<IIngestionBatchPublisher>(services =>
+    new RabbitMqIngestionBatchPublisher(
+        rabbitMqConnectionString,
+        services.GetRequiredService<IOptions<RabbitMqOptions>>().Value));
 
 builder.Services.AddScoped<IngestEventsHandler>(services =>
 {
@@ -70,7 +87,7 @@ builder.Services.AddOpenApi(options =>
                         Schema = new OpenApiSchema
                         {
                             Type = JsonSchemaType.String,
-                            Description = "One Event Contract v1 JSON object per line."
+                            Description = "Raw NDJSON batch accepted for asynchronous processing."
                         }
                     }
                 }

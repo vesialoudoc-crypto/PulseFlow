@@ -1,5 +1,5 @@
 ﻿using Microsoft.AspNetCore.Mvc;
-using PulseFlow.Api.Ingestion.Ndjson;
+using PulseFlow.Api.Ingestion.Messaging;
 
 namespace PulseFlow.Api.Ingestion.Http;
 
@@ -8,32 +8,27 @@ namespace PulseFlow.Api.Ingestion.Http;
 [Consumes("application/x-ndjson")]
 public sealed class EventsController : ControllerBase
 {
-    private readonly NdjsonRecordReader _reader;
-    private readonly IngestEventsHandler _handler;
+    private readonly IIngestionBatchPublisher _publisher;
 
-    public EventsController(
-        NdjsonRecordReader reader,
-        IngestEventsHandler handler)
+    public EventsController(IIngestionBatchPublisher publisher)
     {
-        _reader = reader;
-        _handler = handler;
+        _publisher = publisher;
     }
 
     [HttpPost]
-    [ProducesResponseType<IngestEventsResult>(StatusCodes.Status200OK)]
+    [ProducesResponseType(StatusCodes.Status202Accepted)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status415UnsupportedMediaType)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status500InternalServerError)]
-    public async Task<ActionResult<IngestEventsResult>> IngestAsync(
+    public async Task<IActionResult> IngestAsync(
         CancellationToken cancellationToken)
     {
-        var records = _reader.ReadAsync(
-            Request.Body,
+        await using var batchStream = new MemoryStream();
+        await Request.Body.CopyToAsync(batchStream, cancellationToken);
+
+        await _publisher.PublishAsync(
+            batchStream.ToArray(),
             cancellationToken);
 
-        var result = await _handler.HandleAsync(
-            records,
-            cancellationToken);
-
-        return Ok(result);
+        return Accepted();
     }
 }
