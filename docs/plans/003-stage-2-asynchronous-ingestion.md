@@ -252,6 +252,11 @@ implementation step makes them necessary:
 
 - request, batch, and message-size limits; compression;
 - exchange/queue topology and routing-key conventions;
+- broker-side flow control and RabbitMQ prefetch. The adapter's unbounded application
+  channel and RabbitMQ.Client 7.2.2's internal unbounded consumer-dispatch work
+  channel do not provide a production throughput or memory guarantee. A reliability
+  step must decide the acknowledgement outcome when parsing or persistence fails
+  before selecting prefetch;
 - acknowledgement/requeue semantics, retries, dead-letter queues, and exact delivery
   guarantees;
 - Outbox, idempotency, deduplication, and batch-status persistence; Redis rate-limiting

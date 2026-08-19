@@ -129,13 +129,19 @@ and PostgreSQL Testcontainers test verifies the complete path and the separate c
 channels. `RabbitMq:ConsumerCount` defaults to 1 and is validated as positive; it
 controls parser-consumer capacity, not HTTP API instance count. Retry, dead-letter,
 requeue, Outbox, idempotency, delivery guarantees, and batch status remain intentionally
-unresolved.
+unresolved. The adapter copies deliveries into an unbounded application channel, and
+RabbitMQ.Client 7.2.2 has an internal unbounded consumer-dispatch work channel, so the
+current Stage 2 buffering is not a production throughput or memory guarantee.
+Broker-side flow control through RabbitMQ prefetch is intentionally deferred.
 
 ### Do Not Decide in Advance
 
 - Request and message-size limits, compression, exchange and queue topology,
   routing-key conventions, acknowledgement/requeue behavior, retry policy,
-  dead-letter queues, delivery guarantees, and deployment topology.
+  dead-letter queues, delivery guarantees, broker-side flow control, RabbitMQ
+  prefetch, and deployment topology. Prefetch must be designed with the outcome of a
+  parsing or persistence failure, rather than selected before acknowledgement behavior
+  for that failure is decided.
 - Outbox, idempotency, deduplication, batch-status persistence, and public
   status/query endpoints; these are not prerequisites for the first Stage 2 slice.
   Redis implementation is deferred to Stage 4 for distributed ingestion rate limiting,
@@ -148,6 +154,8 @@ unresolved.
 ### Goals
 
 - Define and implement behavior for repeated requests and repeated delivery.
+- Decide what happens to a delivery when parsing or persistence fails before choosing
+  RabbitMQ prefetch or other broker-side flow control.
 - Introduce bounded retries and handling for unrecoverable messages.
 - Test partial failures between the main components.
 - Prevent silent data loss in the selected scenarios.

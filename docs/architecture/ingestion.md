@@ -262,6 +262,12 @@ The application-facing consumer boundary is an `IAsyncEnumerable<IngestionBatchD
 RabbitMQ's callback model, delivery tag, `IConnection`, `IChannel`, and basic consume
 and acknowledgement calls remain inside the RabbitMQ adapter. The adapter translates
 the RabbitMQ callback into the async stream through `System.Threading.Channels`.
+`RabbitMqIngestionBatchConsumer` copies each delivery body and writes it to an
+unbounded application channel. RabbitMQ.Client 7.2.2 also uses an internal unbounded
+consumer-dispatch work channel. This buffering supports the current Stage 2 adapter
+boundary, but it is not a production throughput or memory guarantee and does not
+provide complete consumer flow control. Broker-side flow control through RabbitMQ
+prefetch is intentionally deferred.
 
 For each delivery, the consumer creates an asynchronous DI scope, resolves the scoped
 `IngestEventsHandler` and its EF Core persistence dependencies from that scope, exposes
@@ -278,6 +284,12 @@ policy. Shutdown cancellation is passed to RabbitMQ consumption where supported,
 reader, and the handler; it is not logged as a processing failure. On hosted-service
 shutdown, consumption is cancelled and the consumer-owned channel is disposed before
 application composition disposes the shared RabbitMQ connection.
+
+Prefetch must be designed together with processing-failure acknowledgement behavior.
+The future reliability step must first decide what happens to a delivery when parsing
+or persistence fails, before choosing prefetch, because prefetch would affect that
+failure path. Retry, requeue, negative acknowledgement, dead-letter, poison-message,
+Outbox, idempotency, and delivery-guarantee policies remain unresolved.
 
 The single hosted service starts one worker for each validated `RabbitMq:ConsumerCount`
 value. Each worker owns an independent consumer channel, while all consumer channels
@@ -304,6 +316,9 @@ tests do not claim an ordering, distribution, or performance characteristic.
 - RabbitMQ routing-key conventions beyond the direct configured-queue publish;
 - acknowledgement/requeue semantics beyond successful manual acknowledgement, retry
   policy, dead-letter queues, poison-message handling, and delivery guarantees;
+- broker-side flow control and RabbitMQ prefetch, which must follow the processing-
+  failure acknowledgement decision rather than being inferred from the current
+  unbounded buffering;
 - batch-status persistence and public status/query endpoint contract;
 - deployment topology for RabbitMQ and parser consumers;
 - a measured and tuned chunk capacity;
