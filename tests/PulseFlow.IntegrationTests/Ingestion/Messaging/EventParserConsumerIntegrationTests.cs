@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -27,14 +28,15 @@ public sealed class EventParserConsumerIntegrationTests : IClassFixture<PostgreS
     public async Task EventParserConsumer_ValidRawBatch_PersistsEventsThroughPostgreSql()
     {
         // Arrange
-        var consumerChannel = new TestRabbitMqConsumerChannel();
+        var consumer = new TestIngestionBatchConsumer();
         await using var serviceProvider = CreateServiceProvider();
         await EnsureDatabaseMigratedAsync(serviceProvider);
         var eventParserConsumer = new EventParserConsumer(
-            consumerChannel,
+            new TestIngestionBatchConsumerFactory(consumer),
             serviceProvider.GetRequiredService<IServiceScopeFactory>(),
             serviceProvider.GetRequiredService<NdjsonRecordReader>(),
-            NullLogger<EventParserConsumer>.Instance);
+            NullLogger<EventParserConsumer>.Instance,
+            consumerCount: 1);
         using var stoppingSource = new CancellationTokenSource();
         var rawBatch = string.Join(
             '\n',
@@ -44,9 +46,9 @@ public sealed class EventParserConsumerIntegrationTests : IClassFixture<PostgreS
 
         // Act
         await eventParserConsumer.StartAsync(stoppingSource.Token);
-        await consumerChannel.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        await consumerChannel.DeliverAsync(
-            new RabbitMqDelivery(1, Encoding.UTF8.GetBytes(rawBatch)),
+        await consumer.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await consumer.DeliverAsync(
+            Encoding.UTF8.GetBytes(rawBatch),
             stoppingSource.Token);
 
         // Assert
@@ -101,35 +103,49 @@ public sealed class EventParserConsumerIntegrationTests : IClassFixture<PostgreS
         });
     }
 
-    private sealed class TestRabbitMqConsumerChannel : IRabbitMqConsumerChannel
+    private sealed class TestIngestionBatchConsumerFactory : IIngestionBatchConsumerFactory
     {
-        private Func<RabbitMqDelivery, CancellationToken, Task>? _deliveryHandler;
+        private readonly TestIngestionBatchConsumer _consumer;
+
+        public TestIngestionBatchConsumerFactory(TestIngestionBatchConsumer consumer)
+        {
+            _consumer = consumer;
+        }
+
+        public ValueTask<IIngestionBatchConsumer> CreateAsync(
+            CancellationToken cancellationToken)
+        {
+            return ValueTask.FromResult<IIngestionBatchConsumer>(_consumer);
+        }
+    }
+
+    private sealed class TestIngestionBatchConsumer : IIngestionBatchConsumer
+    {
+        private readonly Channel<IngestionBatchDelivery> _deliveries =
+            Channel.CreateUnbounded<IngestionBatchDelivery>();
 
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Task StartConsumingAsync(
-            Func<RabbitMqDelivery, CancellationToken, Task> deliveryHandler,
+        public IAsyncEnumerable<IngestionBatchDelivery> ReadAllAsync(
             CancellationToken cancellationToken)
         {
-            _deliveryHandler = deliveryHandler;
             Started.SetResult();
-            return Task.CompletedTask;
+            return _deliveries.Reader.ReadAllAsync(cancellationToken);
         }
 
-        public Task AcknowledgeAsync(ulong deliveryTag, CancellationToken cancellationToken)
+        public ValueTask DisposeAsync()
         {
-            return Task.CompletedTask;
+            _deliveries.Writer.TryComplete();
+            return ValueTask.CompletedTask;
         }
 
-        public Task StopConsumingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-
-        public Task DeliverAsync(RabbitMqDelivery delivery, CancellationToken cancellationToken)
+        public ValueTask DeliverAsync(ReadOnlyMemory<byte> body, CancellationToken cancellationToken)
         {
-            return (_deliveryHandler ?? throw new InvalidOperationException("Consumer has not started."))(
-                delivery,
-                cancellationToken);
+            var delivery = new IngestionBatchDelivery(
+                body,
+                acknowledgementCancellationToken => Task.CompletedTask);
+
+            return _deliveries.Writer.WriteAsync(delivery, cancellationToken);
         }
     }
 

@@ -1,5 +1,6 @@
 using System.Text;
 using System.Text.Json;
+using System.Threading.Channels;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
 using PulseFlow.Api.Ingestion;
@@ -19,11 +20,11 @@ public sealed class EventParserConsumerTests
         // Arrange
         var store = new RecordingEventChunkStore();
         await using var testContext = CreateTestContext(store);
-        var delivery = new RabbitMqDelivery(1, Encoding.UTF8.GetBytes(
-            CreateRecordJson("first") + "\n" + CreateRecordJson("second") + "\n"));
+        var rawBatch = Encoding.UTF8.GetBytes(
+            CreateRecordJson("first") + "\n" + CreateRecordJson("second") + "\n");
 
         // Act
-        await testContext.DeliverAsync(delivery);
+        await testContext.DeliverAsync(rawBatch);
 
         // Assert
         var persistedTypes = Assert.Single(store.SuccessfulChunks)
@@ -44,10 +45,8 @@ public sealed class EventParserConsumerTests
             CreateRecordJson("invalid", payload: new[] { 1, 2, 3 }),
             CreateRecordJson("valid"),
             string.Empty);
-        var delivery = new RabbitMqDelivery(1, Encoding.UTF8.GetBytes(rawBatch));
-
         // Act
-        await testContext.DeliverAsync(delivery);
+        await testContext.DeliverAsync(Encoding.UTF8.GetBytes(rawBatch));
 
         // Assert
         var persistedEvent = Assert.Single(Assert.Single(store.SuccessfulChunks));
@@ -60,13 +59,11 @@ public sealed class EventParserConsumerTests
         // Arrange
         var store = new RecordingEventChunkStore();
         await using var testContext = CreateTestContext(store);
-        var delivery = new RabbitMqDelivery(42, Encoding.UTF8.GetBytes(CreateRecordJson("valid") + "\n"));
-
         // Act
-        await testContext.DeliverAsync(delivery);
+        await testContext.DeliverAsync(Encoding.UTF8.GetBytes(CreateRecordJson("valid") + "\n"));
 
         // Assert
-        Assert.Equal(new ulong[] { 42 }, testContext.ConsumerChannel.AcknowledgedDeliveryTags);
+        Assert.Equal(1, testContext.Consumer.AcknowledgementCount);
     }
 
     [Fact]
@@ -75,13 +72,12 @@ public sealed class EventParserConsumerTests
         // Arrange
         var store = new RecordingEventChunkStore(new InvalidOperationException("Persistence failed."));
         await using var testContext = CreateTestContext(store);
-        var delivery = new RabbitMqDelivery(42, Encoding.UTF8.GetBytes(CreateRecordJson("valid") + "\n"));
-
         // Act
-        await testContext.DeliverAsync(delivery);
+        await testContext.SendAsync(Encoding.UTF8.GetBytes(CreateRecordJson("valid") + "\n"));
+        await store.StoreAttempted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         // Assert
-        Assert.Empty(testContext.ConsumerChannel.AcknowledgedDeliveryTags);
+        Assert.Equal(0, testContext.Consumer.AcknowledgementCount);
     }
 
     #region Test helpers
@@ -97,7 +93,7 @@ public sealed class EventParserConsumerTests
             serviceProvider.GetRequiredService<IEventChunkStore>(),
             chunkCapacity: 10));
 
-        return new ConsumerTestContext(services.BuildServiceProvider(), new TestRabbitMqConsumerChannel());
+        return new ConsumerTestContext(services.BuildServiceProvider(), new TestIngestionBatchConsumer());
     }
 
     private static string CreateRecordJson(string type, object? payload = null)
@@ -119,24 +115,32 @@ public sealed class EventParserConsumerTests
 
         public ConsumerTestContext(
             ServiceProvider serviceProvider,
-            TestRabbitMqConsumerChannel consumerChannel)
+            TestIngestionBatchConsumer consumer)
         {
             _serviceProvider = serviceProvider;
-            ConsumerChannel = consumerChannel;
+            Consumer = consumer;
             _eventParserConsumer = new EventParserConsumer(
-                ConsumerChannel,
+                new TestIngestionBatchConsumerFactory(Consumer),
                 _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
                 _serviceProvider.GetRequiredService<NdjsonRecordReader>(),
-                NullLogger<EventParserConsumer>.Instance);
+                NullLogger<EventParserConsumer>.Instance,
+                consumerCount: 1);
         }
 
-        public TestRabbitMqConsumerChannel ConsumerChannel { get; }
+        public TestIngestionBatchConsumer Consumer { get; }
 
-        public async Task DeliverAsync(RabbitMqDelivery delivery)
+        public async Task DeliverAsync(ReadOnlyMemory<byte> body)
         {
             await _eventParserConsumer.StartAsync(_stoppingSource.Token);
-            await ConsumerChannel.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
-            await ConsumerChannel.DeliverAsync(delivery, _stoppingSource.Token);
+            await Consumer.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await Consumer.DeliverAsync(body, _stoppingSource.Token);
+        }
+
+        public async Task SendAsync(ReadOnlyMemory<byte> body)
+        {
+            await _eventParserConsumer.StartAsync(_stoppingSource.Token);
+            await Consumer.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+            await Consumer.SendAsync(body, _stoppingSource.Token);
         }
 
         public async ValueTask DisposeAsync()
@@ -148,40 +152,72 @@ public sealed class EventParserConsumerTests
         }
     }
 
-    private sealed class TestRabbitMqConsumerChannel : IRabbitMqConsumerChannel
+    private sealed class TestIngestionBatchConsumerFactory : IIngestionBatchConsumerFactory
     {
-        private Func<RabbitMqDelivery, CancellationToken, Task>? _deliveryHandler;
+        private readonly TestIngestionBatchConsumer _consumer;
+
+        public TestIngestionBatchConsumerFactory(TestIngestionBatchConsumer consumer)
+        {
+            _consumer = consumer;
+        }
+
+        public ValueTask<IIngestionBatchConsumer> CreateAsync(
+            CancellationToken cancellationToken)
+        {
+            return ValueTask.FromResult<IIngestionBatchConsumer>(_consumer);
+        }
+    }
+
+    private sealed class TestIngestionBatchConsumer : IIngestionBatchConsumer
+    {
+        private readonly Channel<IngestionBatchDelivery> _deliveries =
+            Channel.CreateUnbounded<IngestionBatchDelivery>();
 
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public List<ulong> AcknowledgedDeliveryTags { get; } = [];
+        public int AcknowledgementCount { get; private set; }
 
-        public Task StartConsumingAsync(
-            Func<RabbitMqDelivery, CancellationToken, Task> deliveryHandler,
+        public IAsyncEnumerable<IngestionBatchDelivery> ReadAllAsync(
             CancellationToken cancellationToken)
         {
-            _deliveryHandler = deliveryHandler;
             Started.SetResult();
-            return Task.CompletedTask;
+            return _deliveries.Reader.ReadAllAsync(cancellationToken);
         }
 
-        public Task AcknowledgeAsync(
-            ulong deliveryTag,
-            CancellationToken cancellationToken)
+        public ValueTask DisposeAsync()
         {
-            AcknowledgedDeliveryTags.Add(deliveryTag);
-            return Task.CompletedTask;
+            _deliveries.Writer.TryComplete();
+            return ValueTask.CompletedTask;
         }
 
-        public Task StopConsumingAsync(CancellationToken cancellationToken) => Task.CompletedTask;
-
-        public ValueTask DisposeAsync() => ValueTask.CompletedTask;
-
-        public Task DeliverAsync(RabbitMqDelivery delivery, CancellationToken cancellationToken)
+        public async Task DeliverAsync(ReadOnlyMemory<byte> body, CancellationToken cancellationToken)
         {
-            return (_deliveryHandler ?? throw new InvalidOperationException("Consumer has not started."))(
-                delivery,
-                cancellationToken);
+            var acknowledged = new TaskCompletionSource(
+                TaskCreationOptions.RunContinuationsAsynchronously);
+            var delivery = new IngestionBatchDelivery(
+                body,
+                acknowledgementCancellationToken =>
+                {
+                    AcknowledgementCount++;
+                    acknowledged.SetResult();
+                    return Task.CompletedTask;
+                });
+
+            await _deliveries.Writer.WriteAsync(delivery, cancellationToken);
+            await acknowledged.Task.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+        }
+
+        public ValueTask SendAsync(ReadOnlyMemory<byte> body, CancellationToken cancellationToken)
+        {
+            var delivery = new IngestionBatchDelivery(
+                body,
+                acknowledgementCancellationToken =>
+                {
+                    AcknowledgementCount++;
+                    return Task.CompletedTask;
+                });
+
+            return _deliveries.Writer.WriteAsync(delivery, cancellationToken);
         }
     }
 
@@ -196,10 +232,15 @@ public sealed class EventParserConsumerTests
 
         public List<IReadOnlyList<EventEnvelope>> SuccessfulChunks { get; } = [];
 
+        public TaskCompletionSource StoreAttempted { get; } = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
         public Task StoreAsync(
             IReadOnlyCollection<EventEnvelope> events,
             CancellationToken cancellationToken = default)
         {
+            StoreAttempted.SetResult();
+
             if (_exception is not null)
             {
                 throw _exception;

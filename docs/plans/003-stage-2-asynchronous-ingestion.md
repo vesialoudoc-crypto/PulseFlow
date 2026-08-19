@@ -2,13 +2,13 @@
 
 **Document type:** PLAN
 
-**Status:** In progress
+**Status:** Completed
 
 **ADR status:** This document is not an ADR. It sequences implementation of the
 Stage 2 direction accepted in
 [ADR 0008](../decisions/0008-use-rabbitmq-to-decouple-http-ingestion-from-parsing.md).
-It preserves the implemented Stage 1 decisions and does not claim that RabbitMQ or an
-asynchronous consumer currently exists.
+It preserves the implemented Stage 1 decisions and records only the Stage 2 boundary
+that has been verified.
 
 ## Purpose
 
@@ -219,14 +219,15 @@ or validation back into the HTTP boundary.
 
 ### Step 5: Review the Stage 2 slice and record the resulting boundary
 
-**Implementation status:** Not started.
+**Implementation status:** Completed on 2026-08-19.
 
 #### Responsibility introduced
 
-Review the implemented slice against ADR 0008, Event Contract v1, the actual public
-HTTP behavior, RabbitMQ composition, and the parser-consumer persistence path. Update
-active architecture and roadmap documentation only to reflect proved implementation,
-then create an immutable checkpoint.
+Reviewed the implemented slice against ADR 0008, Event Contract v1, the actual public
+HTTP behavior, RabbitMQ composition, and the parser-consumer persistence path. The
+review also corrected the RabbitMQ infrastructure boundary: application code no longer
+receives RabbitMQ.Client connection or channel primitives, callback handlers, or
+delivery tags.
 
 #### What this step proves
 

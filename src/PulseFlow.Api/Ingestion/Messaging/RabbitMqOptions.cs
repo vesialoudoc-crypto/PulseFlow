@@ -10,6 +10,6 @@ public sealed class RabbitMqOptions
     public string QueueName { get; init; } = string.Empty;
 
     [Range(1, int.MaxValue)]
-    // This changes parser capacity inside one API process, not the number of API instances.
+    // This changes worker count in one process, not the number of API instances.
     public int ConsumerCount { get; init; } = 1;
 }

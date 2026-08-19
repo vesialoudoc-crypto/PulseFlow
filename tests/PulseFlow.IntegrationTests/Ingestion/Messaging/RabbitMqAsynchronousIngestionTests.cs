@@ -5,9 +5,9 @@ using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 using PulseFlow.Api.Ingestion.Messaging;
+using PulseFlow.Api.Ingestion.Messaging.RabbitMq;
 using PulseFlow.Api.Persistence;
 using PulseFlow.IntegrationTests.Infrastructure;
-using RabbitMQ.Client;
 
 namespace PulseFlow.IntegrationTests.Ingestion.Messaging;
 
@@ -52,7 +52,7 @@ public sealed class RabbitMqAsynchronousIngestionTests :
     }
 
     [Fact]
-    public async Task ConsumerCount_Two_RegistersCompetingConsumersWithSharedConnectionAndSeparateChannels()
+    public async Task ConsumerCount_Two_StartsWorkersWithSeparateConsumerChannels()
     {
         // Arrange
         var queueName = CreateQueueName();
@@ -60,20 +60,19 @@ public sealed class RabbitMqAsynchronousIngestionTests :
 
         // This checks channel ownership, not which consumer gets a delivery.
         // Act
-        var consumers = factory.Services
+        var consumer = Assert.Single(factory.Services
             .GetServices<IHostedService>()
             .OfType<EventParserConsumer>()
-            .ToArray();
-        var consumerChannels = consumers
-            .Select(consumer => Assert.IsType<RabbitMqConsumerChannel>(consumer.ConsumerChannel))
-            .ToArray();
+            .ToArray());
+        var consumerFactory = Assert.IsType<RabbitMqIngestionBatchConsumerFactory>(
+            consumer.ConsumerFactory);
+        var consumerChannels = await WaitForConsumerChannelsAsync(consumerFactory);
+        var connectionManager = factory.Services.GetRequiredService<RabbitMqConnectionManager>();
 
         // Assert
+        Assert.Equal(2, consumer.ConsumerCount);
         Assert.Equal(2, consumerChannels.Length);
-        Assert.All(consumerChannels, channel => Assert.Equal(queueName, channel.QueueName));
-        Assert.Same(consumerChannels[0].Connection, consumerChannels[1].Connection);
-        Assert.NotNull(consumerChannels[0].Channel);
-        Assert.NotNull(consumerChannels[1].Channel);
+        Assert.NotNull(connectionManager.Connection);
         Assert.NotSame(consumerChannels[0].Channel, consumerChannels[1].Channel);
     }
 
@@ -132,6 +131,26 @@ public sealed class RabbitMqAsynchronousIngestionTests :
         }
 
         throw new TimeoutException("The expected events were not persisted before the timeout.");
+    }
+
+    private static async Task<RabbitMqIngestionBatchConsumer[]> WaitForConsumerChannelsAsync(
+        RabbitMqIngestionBatchConsumerFactory consumerFactory)
+    {
+        using var timeoutSource = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+
+        while (!timeoutSource.IsCancellationRequested)
+        {
+            var consumers = consumerFactory.Consumers.ToArray();
+
+            if (consumers.Length == 2)
+            {
+                return consumers;
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(50), timeoutSource.Token);
+        }
+
+        throw new TimeoutException("The configured parser consumers did not start before the timeout.");
     }
 
     private PulseFlowDbContext CreateDbContext()

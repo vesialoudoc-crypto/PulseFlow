@@ -83,7 +83,7 @@ Do not treat the initial chunk capacity as tuned, or select RabbitMQ, polling, a
 
 ## Stage 2: Asynchronous Processing
 
-**Status:** In progress
+**Status:** Completed
 
 ### Goals
 
@@ -118,17 +118,18 @@ not required until its contract and storage model have been separately decided.
 
 ### Current implementation
 
-Steps 1 through 4 of PLAN 003 are implemented. `PulseFlow.Api` publishes the complete
+PLAN 003 Steps 1 through 5 are implemented. `PulseFlow.Api` publishes the complete
 raw NDJSON body and returns HTTP 202 only after RabbitMQ confirms publication.
-`EventParserConsumer` runs as a hosted service, consumes the configured durable queue
-on a separate channel, reuses the Stage 1 parsing/validation/chunked-persistence path,
-and acknowledges a delivery only after that handler succeeds. A real RabbitMQ and
-PostgreSQL Testcontainers test verifies the complete path. `RabbitMq:ConsumerCount`
-defaults to 1, is validated as positive, and registers that many competing parser
-consumers on separate channels of the shared application connection; it controls
-parser-consumer capacity, not HTTP API instance count. PLAN 003 Step 5 remains required
-before Stage 2 can be completed; retry, dead-letter, requeue, Outbox, idempotency,
-delivery guarantees, and batch status remain intentionally unresolved.
+`AddIngestionMessaging` hides RabbitMQ resource ownership from application composition.
+It owns one application connection, one publisher-confirmation channel, and one
+consumer channel for each worker. One hosted `EventParserConsumer` starts the validated
+number of competing workers, reuses the Stage 1 parsing/validation/chunked-persistence
+path, and acknowledges a delivery only after that handler succeeds. A real RabbitMQ
+and PostgreSQL Testcontainers test verifies the complete path and the separate consumer
+channels. `RabbitMq:ConsumerCount` defaults to 1 and is validated as positive; it
+controls parser-consumer capacity, not HTTP API instance count. Retry, dead-letter,
+requeue, Outbox, idempotency, delivery guarantees, and batch status remain intentionally
+unresolved.
 
 ### Do Not Decide in Advance
 

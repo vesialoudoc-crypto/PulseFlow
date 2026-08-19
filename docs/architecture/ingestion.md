@@ -1,6 +1,6 @@
 # Ingestion Architecture
 
-**Status:** Stage 2 API-to-RabbitMQ acceptance boundary, parser consumer, real-broker verification, and parser-consumer capacity configuration implemented; review remains
+**Status:** Stage 2 asynchronous ingestion boundary implemented and reviewed
 
 ## Event record
 
@@ -172,22 +172,22 @@ complete request body as raw bytes and passes those bytes to
 `IIngestionBatchPublisher`; it does not invoke `NdjsonRecordReader`,
 `EventEnvelopeValidator`, `IngestEventsHandler`, or PostgreSQL persistence.
 
-Application composition validates the RabbitMQ options and creates one long-lived
-RabbitMQ connection and one publisher-confirmation-enabled channel during startup. It
-declares the configured durable named queue before the host starts accepting requests,
-registers the ready channel for application use, and disposes the channel and
-connection after the host stops. Startup fails if these RabbitMQ resources or the
-queue declaration cannot be initialized.
+Application composition calls `builder.Services.AddIngestionMessaging(builder.Configuration)`.
+The extension validates RabbitMQ options and keeps RabbitMQ.Client primitives inside
+`Ingestion/Messaging/RabbitMq`. `RabbitMqConnectionManager` owns one long-lived
+application connection. During hosted-service startup it establishes that connection
+and declares the configured durable named queue; startup fails if either action fails.
+The manager creates the publisher and consumer channels and disposes the connection
+after its dependent messaging resources have stopped.
 
-The singleton `RabbitMqIngestionBatchPublisher` receives the ready shared channel and
-owns only batch publication. It serializes channel access with `SemaphoreSlim`, sets
-persistent `application/x-ndjson` message properties, and publishes the exact raw
-body to the configured queue through RabbitMQ's default exchange. The RabbitMQ
-client's automatic recovery remains at its default enabled setting; this cleanup adds
-no custom retry or reconnection behavior. A failed publication still faults the
-publisher task and reaches the HTTP exception boundary. This is the local, minimum
-Step 2 topology and lifecycle choice rather than a final topology or delivery
-guarantee.
+The singleton `RabbitMqIngestionBatchPublisher` owns a publisher-confirmation-enabled
+channel. It serializes access with `SemaphoreSlim`, sets persistent
+`application/x-ndjson` message properties, and publishes the exact raw body to the
+configured queue through RabbitMQ's default exchange. The RabbitMQ client's automatic
+recovery remains at its default enabled setting; this cleanup adds no custom retry or
+reconnection behavior. A failed publication still faults the publisher task and reaches
+the HTTP exception boundary. This is the local, minimum Step 2 topology and lifecycle
+choice rather than a final topology or delivery guarantee.
 
 HTTP `202 Accepted` with no body is returned only after that publisher task completes
 successfully. Consequently, it means RabbitMQ confirmed publication of the raw batch,
@@ -213,11 +213,11 @@ RabbitMQ
 RabbitMQ connection string is `ConnectionStrings:RabbitMq`, which deployments can
 override using `ConnectionStrings__RabbitMq`; no real credential is stored in
 repository configuration. `RabbitMq:ConsumerCount` defaults to 1 and is validated as
-greater than zero. It controls the number of competing `EventParserConsumer` instances
-inside one application process; it does not control or imply the number of HTTP API
-instances. The existing PostgreSQL composition and reusable Stage 1 parsing,
-validation, and persistence services are not in the HTTP request path. They are
-resolved and used by the parser consumer per RabbitMQ delivery.
+greater than zero. It controls the number of competing parser workers inside one
+application process; it does not control or imply the number of HTTP API instances.
+The existing PostgreSQL composition and reusable Stage 1 parsing, validation, and
+persistence services are not in the HTTP request path. They are resolved and used by
+the parser consumer per RabbitMQ delivery.
 
 `GlobalExceptionHandler` is registered through ASP.NET Core exception-handler
 middleware with Problem Details. Status-code pages provide Problem Details for
@@ -249,12 +249,19 @@ This implements Steps 2 and 3 of the boundary accepted by
 [ADR 0008](../decisions/0008-use-rabbitmq-to-decouple-http-ingestion-from-parsing.md)
 and [ADR 0009](../decisions/0009-define-stage-2-rabbitmq-batch-acceptance-boundary.md).
 
-`EventParserConsumer` is an ASP.NET Core hosted `BackgroundService`. It receives
-deliveries through its own long-lived RabbitMQ channel created from the application's
-long-lived connection; it does not share the publisher channel. The channel consumes
-the configured durable queue with manual acknowledgement and copies the RabbitMQ body
-before processing because RabbitMQ.Client only guarantees the delivered memory during
-the callback.
+`EventParserConsumer` is one ASP.NET Core hosted `BackgroundService`. It starts the
+configured number of workers. Each worker uses `IIngestionBatchConsumerFactory` to
+create an independent `IIngestionBatchConsumer`; the RabbitMQ implementation creates
+one long-lived consumer channel from the application's long-lived connection. It does
+not share the publisher channel. The adapter consumes the configured durable queue with
+manual acknowledgement and copies the RabbitMQ body before processing because
+RabbitMQ.Client only guarantees the delivered memory during the callback.
+
+The application-facing consumer boundary is an `IAsyncEnumerable<IngestionBatchDelivery>`.
+`IngestionBatchDelivery` exposes only the raw batch body and an acknowledgement method.
+RabbitMQ's callback model, delivery tag, `IConnection`, `IChannel`, and basic consume
+and acknowledgement calls remain inside the RabbitMQ adapter. The adapter translates
+the RabbitMQ callback into the async stream through `System.Threading.Channels`.
 
 For each delivery, the consumer creates an asynchronous DI scope, resolves the scoped
 `IngestEventsHandler` and its EF Core persistence dependencies from that scope, exposes
@@ -272,22 +279,20 @@ reader, and the handler; it is not logged as a processing failure. On hosted-ser
 shutdown, consumption is cancelled and the consumer-owned channel is disposed before
 application composition disposes the shared RabbitMQ connection.
 
-Application composition registers one `EventParserConsumer` for each validated
-`RabbitMq:ConsumerCount` value. Each instance creates and owns an independent consumer
-channel, while all consumer channels and the publisher channel share the one application
-RabbitMQ connection. The consumers subscribe to the same configured queue, and RabbitMQ
-is responsible for distributing deliveries between these competing consumers. This is
-structural capacity configuration only; it does not establish throughput, fairness, or
-load-performance results.
+The single hosted service starts one worker for each validated `RabbitMq:ConsumerCount`
+value. Each worker owns an independent consumer channel, while all consumer channels
+and the publisher channel share the one application RabbitMQ connection. The consumers
+subscribe to the same configured queue, and RabbitMQ is responsible for distributing
+deliveries between these competing consumers. This is structural capacity configuration
+only; it does not establish throughput, fairness, or load-performance results.
 
 The complete path is verified in an integration test using real RabbitMQ and PostgreSQL
 Testcontainers. The test starts both containers, starts the real application with a
 generated isolated queue name, posts `application/x-ndjson` to `POST /api/events`,
 asserts HTTP 202, and polls PostgreSQL with a bounded 15-second timeout until the
 expected rows appear. A focused real-broker test also verifies that `ConsumerCount = 2`
-starts two parser consumers that use the same configured queue and connection but
-different consumer channels. These tests do not claim an ordering, distribution, or
-performance characteristic.
+starts two workers with different consumer channels from the shared connection. These
+tests do not claim an ordering, distribution, or performance characteristic.
 
 ## Not yet defined
 

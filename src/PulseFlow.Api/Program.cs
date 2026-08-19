@@ -1,4 +1,3 @@
-using System.ComponentModel.DataAnnotations;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.OpenApi;
@@ -10,7 +9,6 @@ using PulseFlow.Api.Ingestion.Persistence;
 using PulseFlow.Api.Ingestion.Validation;
 using PulseFlow.Api.Persistence;
 using PulseFlow.Api.Persistence.Events;
-using RabbitMQ.Client;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -18,61 +16,6 @@ var connectionString =
     builder.Configuration.GetConnectionString("PulseFlow")
     ?? throw new InvalidOperationException(
         "Connection string 'PulseFlow' is required.");
-
-var rabbitMqConnectionString =
-    builder.Configuration.GetConnectionString("RabbitMq")
-    ?? throw new InvalidOperationException(
-        "Connection string 'RabbitMq' is required.");
-
-var rabbitMqOptions =
-    builder.Configuration
-        .GetRequiredSection(RabbitMqOptions.SectionName)
-        .Get<RabbitMqOptions>()
-    ?? throw new InvalidOperationException(
-        $"Configuration section '{RabbitMqOptions.SectionName}' is required.");
-
-Validator.ValidateObject(
-    rabbitMqOptions,
-    new ValidationContext(rabbitMqOptions),
-    validateAllProperties: true);
-
-var rabbitMqConnectionFactory = new ConnectionFactory
-{
-    Uri = new Uri(rabbitMqConnectionString)
-};
-
-IConnection? rabbitMqConnection = null;
-IChannel? rabbitMqChannel = null;
-
-if (!builder.Environment.IsEnvironment("Testing"))
-{
-    rabbitMqConnection = await rabbitMqConnectionFactory.CreateConnectionAsync();
-
-    try
-    {
-        var channelOptions = new CreateChannelOptions(
-            publisherConfirmationsEnabled: true,
-            publisherConfirmationTrackingEnabled: true);
-
-        rabbitMqChannel = await rabbitMqConnection.CreateChannelAsync(channelOptions);
-
-        await rabbitMqChannel.QueueDeclareAsync(
-            queue: rabbitMqOptions.QueueName,
-            durable: true,
-            exclusive: false,
-            autoDelete: false);
-    }
-    catch
-    {
-        if (rabbitMqChannel is not null)
-        {
-            await rabbitMqChannel.DisposeAsync();
-        }
-
-        await rabbitMqConnection.DisposeAsync();
-        throw;
-    }
-}
 
 builder.Services.AddControllers();
 
@@ -92,30 +35,7 @@ builder.Services.AddSingleton<NdjsonRecordReader>();
 builder.Services.AddSingleton<EventEnvelopeValidator>();
 
 builder.Services.AddScoped<IEventChunkStore, EfCoreEventChunkStore>();
-
-if (rabbitMqChannel is not null)
-{
-    builder.Services.AddSingleton<IChannel>(rabbitMqChannel);
-    builder.Services.AddSingleton<IConnection>(rabbitMqConnection!);
-
-    builder.Services.AddSingleton<IIngestionBatchPublisher>(services =>
-        new RabbitMqIngestionBatchPublisher(
-            services.GetRequiredService<IChannel>(),
-            rabbitMqOptions));
-
-    // Consumers need separate channels, but they all use the application's one connection.
-    for (var consumerIndex = 0; consumerIndex < rabbitMqOptions.ConsumerCount; consumerIndex++)
-    {
-        builder.Services.AddSingleton<IHostedService>(services =>
-            new EventParserConsumer(
-                new RabbitMqConsumerChannel(
-                    services.GetRequiredService<IConnection>(),
-                    rabbitMqOptions),
-                services.GetRequiredService<IServiceScopeFactory>(),
-                services.GetRequiredService<NdjsonRecordReader>(),
-                services.GetRequiredService<ILogger<EventParserConsumer>>()));
-    }
-}
+builder.Services.AddIngestionMessaging(builder.Configuration);
 
 builder.Services.AddScoped<IngestEventsHandler>(services =>
 {
@@ -164,21 +84,6 @@ builder.Services.AddOpenApi(options =>
 });
 
 var app = builder.Build();
-
-if (rabbitMqChannel is not null && rabbitMqConnection is not null)
-{
-    app.Lifetime.ApplicationStopped.Register(() =>
-    {
-        try
-        {
-            rabbitMqChannel.DisposeAsync().AsTask().GetAwaiter().GetResult();
-        }
-        finally
-        {
-            rabbitMqConnection.DisposeAsync().AsTask().GetAwaiter().GetResult();
-        }
-    });
-}
 
 app.UseExceptionHandler();
 app.UseStatusCodePages();
