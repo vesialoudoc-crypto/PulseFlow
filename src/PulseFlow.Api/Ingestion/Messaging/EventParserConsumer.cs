@@ -71,9 +71,6 @@ public sealed class EventParserConsumer : BackgroundService
 
             // Keep the already tested parsing and storage rules in one place.
             await handler.HandleAsync(records, cancellationToken);
-
-            // RabbitMQ can forget this batch only after storage succeeds.
-            await delivery.AcknowledgeAsync(cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
@@ -85,6 +82,10 @@ public sealed class EventParserConsumer : BackgroundService
                 exception,
                 "Event parser consumer rejected an ingestion batch delivery after processing failed.");
             await delivery.RejectAsync(cancellationToken);
+            return;
         }
+
+        // RabbitMQ can forget this batch only after processing and scoped services finish.
+        await delivery.AcknowledgeAsync(cancellationToken);
     }
 }

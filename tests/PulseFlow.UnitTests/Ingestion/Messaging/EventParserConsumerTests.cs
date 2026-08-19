@@ -85,6 +85,44 @@ public sealed class EventParserConsumerTests
     }
 
     [Fact]
+    public async Task EventParserConsumer_AcknowledgementFails_DoesNotRejectDelivery()
+    {
+        // Arrange
+        var store = new RecordingEventChunkStore();
+        await using var testContext = CreateTestContext(store);
+        testContext.Consumer.AcknowledgementException = new InvalidOperationException("Acknowledgement failed.");
+
+        // Act
+        await testContext.SendAsync(Encoding.UTF8.GetBytes(CreateRecordJson("valid") + "\n"));
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => testContext.ExecutionTask.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        // Assert
+        Assert.Equal("Acknowledgement failed.", exception.Message);
+        Assert.Equal(1, testContext.Consumer.AcknowledgementCount);
+        Assert.Equal(0, testContext.Consumer.RejectionCount);
+    }
+
+    [Fact]
+    public async Task EventParserConsumer_RejectionFails_DoesNotAcknowledgeDelivery()
+    {
+        // Arrange
+        var store = new RecordingEventChunkStore(new InvalidOperationException("Persistence failed."));
+        await using var testContext = CreateTestContext(store);
+        testContext.Consumer.RejectionException = new InvalidOperationException("Rejection failed.");
+
+        // Act
+        await testContext.SendAsync(Encoding.UTF8.GetBytes(CreateRecordJson("valid") + "\n"));
+        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
+            () => testContext.ExecutionTask.WaitAsync(TimeSpan.FromSeconds(5)));
+
+        // Assert
+        Assert.Equal("Rejection failed.", exception.Message);
+        Assert.Equal(0, testContext.Consumer.AcknowledgementCount);
+        Assert.Equal(1, testContext.Consumer.RejectionCount);
+    }
+
+    [Fact]
     public async Task EventParserConsumer_ProcessingIsCancelled_DoesNotRejectDelivery()
     {
         // Arrange
@@ -150,6 +188,9 @@ public sealed class EventParserConsumerTests
 
         public TestIngestionBatchConsumer Consumer { get; }
 
+        public Task ExecutionTask => _eventParserConsumer.ExecuteTask
+            ?? throw new InvalidOperationException("The event parser consumer has not started.");
+
         public async Task DeliverAsync(ReadOnlyMemory<byte> body)
         {
             await _eventParserConsumer.StartAsync(_stoppingSource.Token);
@@ -205,6 +246,10 @@ public sealed class EventParserConsumerTests
 
         public int RejectionCount { get; private set; }
 
+        public Exception? AcknowledgementException { get; set; }
+
+        public Exception? RejectionException { get; set; }
+
         public IAsyncEnumerable<IngestionBatchDelivery> ReadAllAsync(
             CancellationToken cancellationToken)
         {
@@ -228,13 +273,17 @@ public sealed class EventParserConsumerTests
                 {
                     AcknowledgementCount++;
                     completed.SetResult();
-                    return Task.CompletedTask;
+                    return AcknowledgementException is null
+                        ? Task.CompletedTask
+                        : Task.FromException(AcknowledgementException);
                 },
                 _ =>
                 {
                     RejectionCount++;
                     completed.SetResult();
-                    return Task.CompletedTask;
+                    return RejectionException is null
+                        ? Task.CompletedTask
+                        : Task.FromException(RejectionException);
                 });
 
             await _deliveries.Writer.WriteAsync(delivery, cancellationToken);
@@ -248,12 +297,16 @@ public sealed class EventParserConsumerTests
                 acknowledgementCancellationToken =>
                 {
                     AcknowledgementCount++;
-                    return Task.CompletedTask;
+                    return AcknowledgementException is null
+                        ? Task.CompletedTask
+                        : Task.FromException(AcknowledgementException);
                 },
                 rejectionCancellationToken =>
                 {
                     RejectionCount++;
-                    return Task.CompletedTask;
+                    return RejectionException is null
+                        ? Task.CompletedTask
+                        : Task.FromException(RejectionException);
                 });
 
             return _deliveries.Writer.WriteAsync(delivery, cancellationToken);

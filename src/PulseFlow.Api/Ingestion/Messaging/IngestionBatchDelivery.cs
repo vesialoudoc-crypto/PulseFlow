@@ -5,7 +5,7 @@ public sealed class IngestionBatchDelivery
     private readonly Func<CancellationToken, Task> _acknowledge;
     private readonly Func<CancellationToken, Task> _reject;
 
-    public IngestionBatchDelivery(
+    internal IngestionBatchDelivery(
         ReadOnlyMemory<byte> body,
         Func<CancellationToken, Task> acknowledge,
         Func<CancellationToken, Task> reject)
