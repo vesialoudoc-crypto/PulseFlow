@@ -266,6 +266,12 @@ not share the publisher channel. The adapter consumes the configured durable que
 manual acknowledgement and copies the RabbitMQ body before processing because
 RabbitMQ.Client only guarantees the delivered memory during the callback.
 
+The hosted service supervises its workers as one unit. When a worker faults or finishes
+before host shutdown, it cancels the linked worker lifetime, waits for every worker to
+finish disposal, and then propagates the original initiating exception. This includes
+RabbitMQ consumption, settlement, channel, and consumer-creation failures. Failures
+during sibling cleanup do not replace the initiating failure. There is no worker restart.
+
 The application-facing consumer boundary is an `IAsyncEnumerable<IngestionBatchDelivery>`.
 `IngestionBatchDelivery` exposes only the raw batch body, an acknowledgement method,
 and a terminal rejection method.
@@ -299,7 +305,9 @@ be dead-lettered. Shutdown cancellation is passed to RabbitMQ consumption where
 supported, the reader, and the handler; it is not logged as a processing failure and
 does not reject a delivery. On hosted-service shutdown, consumption is cancelled and
 the consumer-owned channel is disposed before application composition disposes the
-shared RabbitMQ connection.
+shared RabbitMQ connection. If a consumer tag exists, the adapter attempts
+`BasicCancelAsync` and always attempts channel disposal even when that cancellation
+call fails. It does not explicitly settle outstanding deliveries during cleanup.
 
 The dead-letter queue preserves a failed raw batch for investigation, but it does not
 provide an end-to-end no-loss, at-least-once, or exactly-once guarantee. RabbitMQ

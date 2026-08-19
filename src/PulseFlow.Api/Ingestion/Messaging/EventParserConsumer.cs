@@ -1,6 +1,7 @@
 using Microsoft.Extensions.DependencyInjection;
 using PulseFlow.Api.Ingestion;
 using PulseFlow.Api.Ingestion.Ndjson;
+using System.Runtime.ExceptionServices;
 
 namespace PulseFlow.Api.Ingestion.Messaging;
 
@@ -34,18 +35,55 @@ public sealed class EventParserConsumer : BackgroundService
     protected override async Task ExecuteAsync(CancellationToken stoppingToken)
     {
         // One hosted service owns all workers in this application process.
+        using var workerLifetimeSource = CancellationTokenSource.CreateLinkedTokenSource(stoppingToken);
         var workers = Enumerable
             .Range(0, ConsumerCount)
-            .Select(_ => RunConsumerAsync(stoppingToken));
+            .Select(_ => RunConsumerAsync(workerLifetimeSource.Token))
+            .ToArray();
 
-        await Task.WhenAll(workers);
+        var completedWorker = await Task.WhenAny(workers);
+
+        if (stoppingToken.IsCancellationRequested)
+        {
+            await Task.WhenAll(workers);
+            return;
+        }
+
+        Exception initiatingException;
+
+        try
+        {
+            await completedWorker;
+            initiatingException = new InvalidOperationException(
+                "An event parser consumer worker stopped unexpectedly.");
+        }
+        catch (Exception exception)
+        {
+            initiatingException = exception;
+        }
+
+        workerLifetimeSource.Cancel();
+
+        try
+        {
+            await Task.WhenAll(workers);
+        }
+        catch
+        {
+            // Keep the worker failure that started shutdown.
+        }
+
+        ExceptionDispatchInfo.Capture(initiatingException).Throw();
     }
 
     private async Task RunConsumerAsync(CancellationToken stoppingToken)
     {
+        IIngestionBatchConsumer? consumer = null;
+        ExceptionDispatchInfo? workerException = null;
+
         try
         {
-            await using var consumer = await _consumerFactory.CreateAsync(stoppingToken);
+            consumer = await _consumerFactory.CreateAsync(stoppingToken);
 
             await foreach (var delivery in consumer.ReadAllAsync(stoppingToken))
             {
@@ -55,6 +93,24 @@ public sealed class EventParserConsumer : BackgroundService
         catch (OperationCanceledException) when (stoppingToken.IsCancellationRequested)
         {
         }
+        catch (Exception exception)
+        {
+            workerException = ExceptionDispatchInfo.Capture(exception);
+        }
+
+        try
+        {
+            if (consumer is not null)
+            {
+                await consumer.DisposeAsync();
+            }
+        }
+        catch when (workerException is not null)
+        {
+            // Keep the first worker error.
+        }
+
+        workerException?.Throw();
     }
 
     private async Task ProcessDeliveryAsync(
@@ -80,7 +136,7 @@ public sealed class EventParserConsumer : BackgroundService
         {
             _logger.LogError(
                 exception,
-                "Event parser consumer rejected an ingestion batch delivery after processing failed.");
+                "Event parser consumer processing failed; terminal rejection is being attempted.");
             await delivery.RejectAsync(cancellationToken);
             return;
         }

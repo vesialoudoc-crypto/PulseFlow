@@ -188,6 +188,12 @@ does not permit those queue arguments to change. Application startup never delet
 purges, or silently recreates a queue. The implementation and its limitations are
 recorded in [ADR 0010](decisions/0010-dead-letter-unexpected-batch-processing-failures.md).
 
+The hosted parser consumer supervises all configured workers as one unit. An unexpected
+worker, RabbitMQ, settlement, or consumer-infrastructure failure cancels the sibling
+workers, waits for their cleanup, and fails the hosted service with the initiating
+exception. A worker that finishes while the host is still running is also treated as a
+failure. There is no automatic worker restart.
+
 This is not an end-to-end no-loss, at-least-once, or exactly-once guarantee. RabbitMQ
 dead-letter republishing can fail, and earlier PostgreSQL chunks can already be durable
 when a later chunk fails. Retry, redrive, idempotency, deduplication, Outbox, and

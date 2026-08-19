@@ -44,16 +44,21 @@ internal sealed class RabbitMqIngestionBatchConsumer : IIngestionBatchConsumer
         // Stop new deliveries before closing the broker channel.
         _deliveries.Writer.TryComplete();
 
-        if (_consumerTag is not null)
+        try
         {
-            await _channel.BasicCancelAsync(
-                _consumerTag,
-                noWait: false,
-                CancellationToken.None);
-            _consumerTag = null;
+            if (_consumerTag is not null)
+            {
+                await _channel.BasicCancelAsync(
+                    _consumerTag,
+                    noWait: false,
+                    CancellationToken.None);
+                _consumerTag = null;
+            }
         }
-
-        await _channel.DisposeAsync();
+        finally
+        {
+            await _channel.DisposeAsync();
+        }
     }
 
     private async Task StartAsync(CancellationToken cancellationToken)

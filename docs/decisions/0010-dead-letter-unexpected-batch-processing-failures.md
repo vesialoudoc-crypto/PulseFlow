@@ -47,6 +47,12 @@ Successful processing still acknowledges the delivery only after the ingestion h
 completes. Host shutdown cancellation remains normal shutdown behavior and does not
 reject a delivery.
 
+The hosted parser consumer supervises all configured workers as one unit. If a worker
+fails in RabbitMQ consumption, acknowledgement, rejection, consumer creation, or other
+consumer infrastructure, it cancels sibling workers, waits for their cleanup, and
+propagates the initiating exception. A worker that finishes while the host is still
+running is treated the same way. This slice does not restart workers automatically.
+
 ## Consequences
 
 - Poison-message requeue loops are avoided for the selected unexpected-failure path.
@@ -54,6 +60,9 @@ reject a delivery.
 - The failed raw batch is retained in RabbitMQ's dead-letter queue for investigation.
 - Malformed NDJSON and contract-invalid records remain normal record-level outcomes;
   they do not dead-letter the whole batch.
+- An unexpected worker or RabbitMQ infrastructure failure cannot silently reduce parser
+  capacity inside one hosted service. The service stops all workers and lets normal host
+  supervision observe the initiating failure.
 - A local main queue that was declared by Stage 2 has no dead-letter arguments.
   RabbitMQ will reject an incompatible redeclaration, so the application does not
   delete, purge, or recreate it. A developer must manually recreate that local queue
