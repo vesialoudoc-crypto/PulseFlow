@@ -5,7 +5,7 @@ public sealed class IngestionBatchDelivery
     // The delivery keeps broker details away from the parser worker.
     private readonly Func<CancellationToken, Task> _acknowledge;
 
-    public IngestionBatchDelivery(
+    internal IngestionBatchDelivery(
         ReadOnlyMemory<byte> body,
         Func<CancellationToken, Task> acknowledge)
     {
