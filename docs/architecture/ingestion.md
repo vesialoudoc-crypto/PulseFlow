@@ -257,12 +257,6 @@ not share the publisher channel. The adapter consumes the configured durable que
 manual acknowledgement and copies the RabbitMQ body before processing because
 RabbitMQ.Client only guarantees the delivered memory during the callback.
 
-Before subscribing, each consumer channel sets a per-consumer RabbitMQ prefetch of 1.
-Its channel bridge is also bounded to one copied batch. One worker therefore processes
-deliveries sequentially and can retain at most one unacknowledged copied batch; later
-messages remain on RabbitMQ until that batch is acknowledged. This is flow control for
-the current Stage 2 slice, not a retry or delivery-policy decision.
-
 The application-facing consumer boundary is an `IAsyncEnumerable<IngestionBatchDelivery>`.
 `IngestionBatchDelivery` exposes only the raw batch body and an acknowledgement method.
 RabbitMQ's callback model, delivery tag, `IConnection`, `IChannel`, and basic consume

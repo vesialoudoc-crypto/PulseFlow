@@ -6,17 +6,11 @@ namespace PulseFlow.Api.Ingestion.Messaging.RabbitMq;
 
 internal sealed class RabbitMqIngestionBatchConsumer : IIngestionBatchConsumer
 {
-    private const ushort PrefetchCount = 1;
     private readonly IChannel _channel;
     private readonly string _queueName;
-    // One worker holds at most one copied batch before processing it.
+    // RabbitMQ calls us back, while the application reads one delivery at a time.
     private readonly Channel<IngestionBatchDelivery> _deliveries =
-        System.Threading.Channels.Channel.CreateBounded<IngestionBatchDelivery>(
-            new BoundedChannelOptions(PrefetchCount)
-            {
-                FullMode = BoundedChannelFullMode.Wait,
-                SingleReader = true
-            });
+        System.Threading.Channels.Channel.CreateUnbounded<IngestionBatchDelivery>();
     private string? _consumerTag;
     private bool _isDisposed;
 
@@ -86,12 +80,6 @@ internal sealed class RabbitMqIngestionBatchConsumer : IIngestionBatchConsumer
             _deliveries.Writer.TryWrite(delivery);
             return Task.CompletedTask;
         };
-
-        await _channel.BasicQosAsync(
-            prefetchSize: 0,
-            prefetchCount: PrefetchCount,
-            global: false,
-            cancellationToken: cancellationToken);
 
         _consumerTag = await _channel.BasicConsumeAsync(
             queue: _queueName,
