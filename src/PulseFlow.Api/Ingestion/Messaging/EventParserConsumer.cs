@@ -81,10 +81,10 @@ public sealed class EventParserConsumer : BackgroundService
         }
         catch (Exception exception)
         {
-            // Do not choose retry behavior here before that policy is defined.
             _logger.LogError(
                 exception,
-                "Event parser consumer did not acknowledge an ingestion batch delivery.");
+                "Event parser consumer rejected an ingestion batch delivery after processing failed.");
+            await delivery.RejectAsync(cancellationToken);
         }
     }
 }

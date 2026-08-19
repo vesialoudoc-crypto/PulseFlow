@@ -2,17 +2,20 @@ namespace PulseFlow.Api.Ingestion.Messaging;
 
 public sealed class IngestionBatchDelivery
 {
-    // The delivery keeps broker details away from the parser worker.
     private readonly Func<CancellationToken, Task> _acknowledge;
+    private readonly Func<CancellationToken, Task> _reject;
 
     public IngestionBatchDelivery(
         ReadOnlyMemory<byte> body,
-        Func<CancellationToken, Task> acknowledge)
+        Func<CancellationToken, Task> acknowledge,
+        Func<CancellationToken, Task> reject)
     {
         ArgumentNullException.ThrowIfNull(acknowledge);
+        ArgumentNullException.ThrowIfNull(reject);
 
         Body = body;
         _acknowledge = acknowledge;
+        _reject = reject;
     }
 
     public ReadOnlyMemory<byte> Body { get; }
@@ -20,5 +23,10 @@ public sealed class IngestionBatchDelivery
     public Task AcknowledgeAsync(CancellationToken cancellationToken)
     {
         return _acknowledge(cancellationToken);
+    }
+
+    public Task RejectAsync(CancellationToken cancellationToken)
+    {
+        return _reject(cancellationToken);
     }
 }

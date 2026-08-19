@@ -9,6 +9,12 @@ public sealed class RabbitMqOptions
     [Required]
     public string QueueName { get; init; } = string.Empty;
 
+    public string DeadLetterExchangeName => $"{QueueName}.dead-letter-exchange";
+
+    public string DeadLetterQueueName => $"{QueueName}.dead-letter";
+
+    public string DeadLetterRoutingKey => $"{QueueName}.dead-letter";
+
     [Range(1, int.MaxValue)]
     // This changes worker count in one process, not the number of API instances.
     public int ConsumerCount { get; init; } = 1;

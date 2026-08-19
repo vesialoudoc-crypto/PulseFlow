@@ -149,7 +149,7 @@ Broker-side flow control through RabbitMQ prefetch is intentionally deferred.
 
 ## Stage 3: Reliability and Correctness During Failures
 
-**Status:** Not started
+**Status:** In progress
 
 ### Goals
 
@@ -171,6 +171,27 @@ Broker-side flow control through RabbitMQ prefetch is intentionally deferred.
 ### Expected Result
 
 Automated or reproducible checks exist for a documented set of failures and repetitions. The system reaches a defined state, does not produce inexplicable results, and provides enough information for diagnosis. Accepted guarantees are stated without claiming "exactly once" unless that claim has been demonstrated within defined boundaries.
+
+### Current implementation
+
+The first reliability slice is implemented. For an unexpected parsing or PostgreSQL
+persistence failure, `EventParserConsumer` logs the failure, rejects only that RabbitMQ
+delivery with `requeue = false`, and routes it to a durable dedicated dead-letter queue.
+There are zero automatic retries or redrive operations. Successful processing still
+acknowledges only after the handler completes; shutdown cancellation does not reject a
+delivery. Malformed NDJSON and contract-invalid records remain record-level outcomes
+inside the established pipeline and do not dead-letter the whole batch.
+
+The main queue uses application-owned dead-letter queue arguments. An existing local
+queue that was declared before this change must be recreated manually because RabbitMQ
+does not permit those queue arguments to change. Application startup never deletes,
+purges, or silently recreates a queue. The implementation and its limitations are
+recorded in [ADR 0010](decisions/0010-dead-letter-unexpected-batch-processing-failures.md).
+
+This is not an end-to-end no-loss, at-least-once, or exactly-once guarantee. RabbitMQ
+dead-letter republishing can fail, and earlier PostgreSQL chunks can already be durable
+when a later chunk fails. Retry, redrive, idempotency, deduplication, Outbox, and
+prefetch remain unresolved.
 
 ## Stage 4: Horizontal Scaling and Load
 

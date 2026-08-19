@@ -1,5 +1,8 @@
 ﻿using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.AspNetCore.Hosting;
+using Microsoft.AspNetCore.TestHost;
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
 
 namespace PulseFlow.IntegrationTests.Infrastructure
@@ -12,6 +15,7 @@ namespace PulseFlow.IntegrationTests.Infrastructure
         private readonly string _queueName;
         private readonly int _consumerCount;
         private readonly bool _useRealRabbitMq;
+        private readonly Action<IServiceCollection>? _configureTestServices;
 
         public PulseFlowWebApplicationFactory(string connectionString)
             : this(
@@ -27,13 +31,15 @@ namespace PulseFlow.IntegrationTests.Infrastructure
             string connectionString,
             string rabbitMqConnectionString,
             string queueName,
-            int consumerCount)
+            int consumerCount,
+            Action<IServiceCollection>? configureTestServices = null)
             : this(
                 connectionString,
                 rabbitMqConnectionString,
                 queueName,
                 consumerCount,
-                useRealRabbitMq: true)
+                useRealRabbitMq: true,
+                configureTestServices)
         {
         }
 
@@ -42,13 +48,23 @@ namespace PulseFlow.IntegrationTests.Infrastructure
             string rabbitMqConnectionString,
             string queueName,
             int consumerCount,
-            bool useRealRabbitMq)
+            bool useRealRabbitMq,
+            Action<IServiceCollection>? configureTestServices = null)
         {
             _connectionString = connectionString;
             _rabbitMqConnectionString = rabbitMqConnectionString;
             _queueName = queueName;
             _consumerCount = consumerCount;
             _useRealRabbitMq = useRealRabbitMq;
+            _configureTestServices = configureTestServices;
+        }
+
+        protected override void ConfigureWebHost(IWebHostBuilder builder)
+        {
+            if (_configureTestServices is not null)
+            {
+                builder.ConfigureTestServices(_configureTestServices);
+            }
         }
 
         protected override IHost CreateHost(IHostBuilder builder)

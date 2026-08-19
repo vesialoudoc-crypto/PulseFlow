@@ -143,7 +143,8 @@ public sealed class EventParserConsumerIntegrationTests : IClassFixture<PostgreS
         {
             var delivery = new IngestionBatchDelivery(
                 body,
-                acknowledgementCancellationToken => Task.CompletedTask);
+                acknowledgementCancellationToken => Task.CompletedTask,
+                rejectionCancellationToken => Task.CompletedTask);
 
             return _deliveries.Writer.WriteAsync(delivery, cancellationToken);
         }

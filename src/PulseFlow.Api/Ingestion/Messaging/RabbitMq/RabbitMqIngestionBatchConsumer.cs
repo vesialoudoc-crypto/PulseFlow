@@ -74,7 +74,11 @@ internal sealed class RabbitMqIngestionBatchConsumer : IIngestionBatchConsumer
                 acknowledgementCancellationToken => _channel.BasicAckAsync(
                     eventArgs.DeliveryTag,
                     multiple: false,
-                    acknowledgementCancellationToken).AsTask());
+                    acknowledgementCancellationToken).AsTask(),
+                rejectionCancellationToken => _channel.BasicRejectAsync(
+                    eventArgs.DeliveryTag,
+                    requeue: false,
+                    rejectionCancellationToken).AsTask());
 
             // The app decides when to acknowledge after it processes this delivery.
             _deliveries.Writer.TryWrite(delivery);

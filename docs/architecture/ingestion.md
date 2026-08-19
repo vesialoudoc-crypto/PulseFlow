@@ -1,6 +1,6 @@
 # Ingestion Architecture
 
-**Status:** Stage 2 asynchronous ingestion boundary implemented and reviewed
+**Status:** Stage 3 terminal rejection and dead-letter slice implemented
 
 ## Event record
 
@@ -175,8 +175,17 @@ complete request body as raw bytes and passes those bytes to
 Application composition calls `builder.Services.AddIngestionMessaging(builder.Configuration)`.
 The extension validates RabbitMQ options and keeps RabbitMQ.Client primitives inside
 `Ingestion/Messaging/RabbitMq`. `RabbitMqConnectionManager` owns one long-lived
-application connection. During hosted-service startup it establishes that connection
-and declares the configured durable named queue; startup fails if either action fails.
+application connection. During hosted-service startup it establishes that connection,
+declares the configured durable main queue, and declares a durable direct dead-letter
+exchange and durable dead-letter queue. The main queue uses an explicit dead-letter
+routing key. Startup fails if that topology cannot be declared.
+
+The main queue has application-owned `x-dead-letter-exchange` and
+`x-dead-letter-routing-key` arguments. RabbitMQ does not allow changing those
+arguments on an existing queue. The application never deletes, purges, or silently
+recreates a queue, so an existing local Stage 2 queue must be manually recreated before
+this topology can be used. Mutable production DLX configuration through RabbitMQ
+policies is not automated in this project slice.
 The manager creates the publisher and consumer channels and disposes the connection
 after its dependent messaging resources have stopped.
 
@@ -225,7 +234,7 @@ otherwise body-less error statuses. First-party ASP.NET Core OpenAPI generation
 documents the route, streaming NDJSON request body, and 202, 415, and 500 responses.
 Swagger UI points to the generated document in Development only.
 
-## Stage 2 parser consumer
+## Parser consumer and terminal failure handling
 
 The implemented asynchronous path is:
 
@@ -258,7 +267,8 @@ manual acknowledgement and copies the RabbitMQ body before processing because
 RabbitMQ.Client only guarantees the delivered memory during the callback.
 
 The application-facing consumer boundary is an `IAsyncEnumerable<IngestionBatchDelivery>`.
-`IngestionBatchDelivery` exposes only the raw batch body and an acknowledgement method.
+`IngestionBatchDelivery` exposes only the raw batch body, an acknowledgement method,
+and a terminal rejection method.
 RabbitMQ's callback model, delivery tag, `IConnection`, `IChannel`, and basic consume
 and acknowledgement calls remain inside the RabbitMQ adapter. The adapter translates
 the RabbitMQ callback into the async stream through `System.Threading.Channels`.
@@ -276,20 +286,33 @@ the copied raw batch through a `MemoryStream`, and passes it to the singleton
 chunking, and persistence semantics. The consumer acknowledges the delivery only
 after the handler completes successfully.
 
-If normal processing fails, the consumer logs the exception and deliberately sends no
-successful acknowledgement, reject, or negative acknowledgement. The delivery stays
-unacknowledged for the current channel. This is a deliberately minimal Step 3 failure
-behavior, not a retry, requeue, dead-letter, poison-message, or delivery-guarantee
-policy. Shutdown cancellation is passed to RabbitMQ consumption where supported, the
-reader, and the handler; it is not logged as a processing failure. On hosted-service
-shutdown, consumption is cancelled and the consumer-owned channel is disposed before
-application composition disposes the shared RabbitMQ connection.
+If unexpected parsing or persistence processing fails, the consumer logs the exception
+and terminally rejects that delivery. The RabbitMQ adapter performs this as a
+single-delivery reject with `requeue = false`, which routes the batch to the configured
+dead-letter queue. There are zero automatic retries, no requeue, and no automatic
+redrive. This allows later healthy deliveries to continue without automatically
+replaying a whole batch that may already have partly persisted.
 
-Prefetch must be designed together with processing-failure acknowledgement behavior.
-The future reliability step must first decide what happens to a delivery when parsing
-or persistence fails, before choosing prefetch, because prefetch would affect that
-failure path. Retry, requeue, negative acknowledgement, dead-letter, poison-message,
-Outbox, idempotency, and delivery-guarantee policies remain unresolved.
+Malformed NDJSON records and contract-invalid records remain normal record-level
+outcomes inside the existing handler. They do not cause the complete RabbitMQ batch to
+be dead-lettered. Shutdown cancellation is passed to RabbitMQ consumption where
+supported, the reader, and the handler; it is not logged as a processing failure and
+does not reject a delivery. On hosted-service shutdown, consumption is cancelled and
+the consumer-owned channel is disposed before application composition disposes the
+shared RabbitMQ connection.
+
+The dead-letter queue preserves a failed raw batch for investigation, but it does not
+provide an end-to-end no-loss, at-least-once, or exactly-once guarantee. RabbitMQ
+dead-letter republishing can fail depending on broker topology and availability. Earlier
+PostgreSQL chunks can also have committed before a later chunk fails. Replay,
+idempotency, and deduplication are intentionally undefined. The decision and its
+limits are recorded in [ADR 0010](../decisions/0010-dead-letter-unexpected-batch-processing-failures.md).
+
+Prefetch must be designed after this processing-failure acknowledgement behavior has
+been verified. The current adapter remains unbounded, and this slice does not add
+broker-side flow control. Retry, dead-letter redrive, poison-message handling beyond
+terminal broker retention, Outbox, idempotency, and delivery-guarantee policies remain
+unresolved.
 
 The single hosted service starts one worker for each validated `RabbitMq:ConsumerCount`
 value. Each worker owns an independent consumer channel, while all consumer channels

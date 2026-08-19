@@ -43,11 +43,39 @@ internal sealed class RabbitMqConnectionManager : IAsyncDisposable
             // This short-lived channel only prepares the queue before workers start.
             await using var topologyChannel = await _connection.CreateChannelAsync(
                 cancellationToken: cancellationToken);
+            await topologyChannel.ExchangeDeclareAsync(
+                exchange: _options.DeadLetterExchangeName,
+                type: ExchangeType.Direct,
+                durable: true,
+                autoDelete: false,
+                arguments: null,
+                passive: false,
+                noWait: false,
+                cancellationToken: cancellationToken);
+            await topologyChannel.QueueDeclareAsync(
+                queue: _options.DeadLetterQueueName,
+                durable: true,
+                exclusive: false,
+                autoDelete: false,
+                arguments: null,
+                cancellationToken: cancellationToken);
+            await topologyChannel.QueueBindAsync(
+                queue: _options.DeadLetterQueueName,
+                exchange: _options.DeadLetterExchangeName,
+                routingKey: _options.DeadLetterRoutingKey,
+                arguments: null,
+                cancellationToken: cancellationToken);
             await topologyChannel.QueueDeclareAsync(
                 queue: _options.QueueName,
                 durable: true,
                 exclusive: false,
                 autoDelete: false,
+                // Existing queues must be recreated manually before these arguments change.
+                arguments: new Dictionary<string, object?>
+                {
+                    ["x-dead-letter-exchange"] = _options.DeadLetterExchangeName,
+                    ["x-dead-letter-routing-key"] = _options.DeadLetterRoutingKey
+                },
                 cancellationToken: cancellationToken);
 
             _isInitialized = true;

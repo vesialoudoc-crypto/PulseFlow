@@ -51,6 +51,8 @@ public sealed class EventParserConsumerTests
         // Assert
         var persistedEvent = Assert.Single(Assert.Single(store.SuccessfulChunks));
         Assert.Equal("valid", persistedEvent.Type);
+        Assert.Equal(1, testContext.Consumer.AcknowledgementCount);
+        Assert.Equal(0, testContext.Consumer.RejectionCount);
     }
 
     [Fact]
@@ -64,20 +66,39 @@ public sealed class EventParserConsumerTests
 
         // Assert
         Assert.Equal(1, testContext.Consumer.AcknowledgementCount);
+        Assert.Equal(0, testContext.Consumer.RejectionCount);
     }
 
     [Fact]
-    public async Task EventParserConsumer_ProcessingFails_DoesNotAcknowledgeDelivery()
+    public async Task EventParserConsumer_UnexpectedPersistenceFailure_RejectsDeliveryWithoutAcknowledging()
     {
         // Arrange
         var store = new RecordingEventChunkStore(new InvalidOperationException("Persistence failed."));
         await using var testContext = CreateTestContext(store);
+
         // Act
-        await testContext.SendAsync(Encoding.UTF8.GetBytes(CreateRecordJson("valid") + "\n"));
-        await store.StoreAttempted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await testContext.DeliverAsync(Encoding.UTF8.GetBytes(CreateRecordJson("valid") + "\n"));
 
         // Assert
         Assert.Equal(0, testContext.Consumer.AcknowledgementCount);
+        Assert.Equal(1, testContext.Consumer.RejectionCount);
+    }
+
+    [Fact]
+    public async Task EventParserConsumer_ProcessingIsCancelled_DoesNotRejectDelivery()
+    {
+        // Arrange
+        var store = new RecordingEventChunkStore(waitForCancellation: true);
+        await using var testContext = CreateTestContext(store);
+
+        // Act
+        await testContext.SendAsync(Encoding.UTF8.GetBytes(CreateRecordJson("valid") + "\n"));
+        await store.StoreAttempted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await testContext.StopAsync();
+
+        // Assert
+        Assert.Equal(0, testContext.Consumer.AcknowledgementCount);
+        Assert.Equal(0, testContext.Consumer.RejectionCount);
     }
 
     #region Test helpers
@@ -145,10 +166,15 @@ public sealed class EventParserConsumerTests
 
         public async ValueTask DisposeAsync()
         {
-            _stoppingSource.Cancel();
-            await _eventParserConsumer.StopAsync(CancellationToken.None);
+            await StopAsync();
             _stoppingSource.Dispose();
             await _serviceProvider.DisposeAsync();
+        }
+
+        public async Task StopAsync()
+        {
+            _stoppingSource.Cancel();
+            await _eventParserConsumer.StopAsync(CancellationToken.None);
         }
     }
 
@@ -177,6 +203,8 @@ public sealed class EventParserConsumerTests
 
         public int AcknowledgementCount { get; private set; }
 
+        public int RejectionCount { get; private set; }
+
         public IAsyncEnumerable<IngestionBatchDelivery> ReadAllAsync(
             CancellationToken cancellationToken)
         {
@@ -192,19 +220,25 @@ public sealed class EventParserConsumerTests
 
         public async Task DeliverAsync(ReadOnlyMemory<byte> body, CancellationToken cancellationToken)
         {
-            var acknowledged = new TaskCompletionSource(
+            var completed = new TaskCompletionSource(
                 TaskCreationOptions.RunContinuationsAsynchronously);
             var delivery = new IngestionBatchDelivery(
                 body,
-                acknowledgementCancellationToken =>
+                _ =>
                 {
                     AcknowledgementCount++;
-                    acknowledged.SetResult();
+                    completed.SetResult();
+                    return Task.CompletedTask;
+                },
+                _ =>
+                {
+                    RejectionCount++;
+                    completed.SetResult();
                     return Task.CompletedTask;
                 });
 
             await _deliveries.Writer.WriteAsync(delivery, cancellationToken);
-            await acknowledged.Task.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
+            await completed.Task.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
         }
 
         public ValueTask SendAsync(ReadOnlyMemory<byte> body, CancellationToken cancellationToken)
@@ -215,6 +249,11 @@ public sealed class EventParserConsumerTests
                 {
                     AcknowledgementCount++;
                     return Task.CompletedTask;
+                },
+                rejectionCancellationToken =>
+                {
+                    RejectionCount++;
+                    return Task.CompletedTask;
                 });
 
             return _deliveries.Writer.WriteAsync(delivery, cancellationToken);
@@ -224,10 +263,14 @@ public sealed class EventParserConsumerTests
     private sealed class RecordingEventChunkStore : IEventChunkStore
     {
         private readonly Exception? _exception;
+        private readonly bool _waitForCancellation;
 
-        public RecordingEventChunkStore(Exception? exception = null)
+        public RecordingEventChunkStore(
+            Exception? exception = null,
+            bool waitForCancellation = false)
         {
             _exception = exception;
+            _waitForCancellation = waitForCancellation;
         }
 
         public List<IReadOnlyList<EventEnvelope>> SuccessfulChunks { get; } = [];
@@ -235,11 +278,16 @@ public sealed class EventParserConsumerTests
         public TaskCompletionSource StoreAttempted { get; } = new(
             TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public Task StoreAsync(
+        public async Task StoreAsync(
             IReadOnlyCollection<EventEnvelope> events,
             CancellationToken cancellationToken = default)
         {
             StoreAttempted.SetResult();
+
+            if (_waitForCancellation)
+            {
+                await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            }
 
             if (_exception is not null)
             {
@@ -247,7 +295,6 @@ public sealed class EventParserConsumerTests
             }
 
             SuccessfulChunks.Add(events.ToArray());
-            return Task.CompletedTask;
         }
     }
 

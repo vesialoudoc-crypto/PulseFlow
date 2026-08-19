@@ -4,10 +4,14 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
 using PulseFlow.Api.Ingestion.Messaging;
 using PulseFlow.Api.Ingestion.Messaging.RabbitMq;
+using PulseFlow.Api.Ingestion.Persistence;
 using PulseFlow.Api.Persistence;
+using PulseFlow.Api.Persistence.Events;
 using PulseFlow.IntegrationTests.Infrastructure;
+using RabbitMQ.Client;
 
 namespace PulseFlow.IntegrationTests.Ingestion.Messaging;
 
@@ -76,17 +80,54 @@ public sealed class RabbitMqAsynchronousIngestionTests :
         Assert.NotSame(consumerChannels[0].Channel, consumerChannels[1].Channel);
     }
 
+    [Fact]
+    public async Task ProcessingFails_RejectsBatchToDeadLetterQueueAndContinuesWithHealthyBatch()
+    {
+        // Arrange
+        const string failedType = "real-broker.integration.failed";
+        var healthyType = "real-broker.integration.healthy";
+        var queueName = CreateQueueName();
+        using var factory = CreateFactory(
+            consumerCount: 1,
+            queueName,
+            services => services.AddScoped<IEventChunkStore>(serviceProvider =>
+                new FailingEventChunkStore(
+                    serviceProvider.GetRequiredService<PulseFlowDbContext>(),
+                    failedType)));
+        await EnsureDatabaseMigratedAsync(factory.Services);
+        var options = factory.Services.GetRequiredService<IOptions<RabbitMqOptions>>().Value;
+        using var client = factory.CreateClient();
+        using var failedContent = CreateNdjsonContent(new[] { failedType });
+
+        // Act
+        using var failedResponse = await client.PostAsync("/api/events", failedContent);
+        var deadLetteredBody = await WaitForDeadLetterBodyAsync(options.DeadLetterQueueName);
+        using var healthyContent = CreateNdjsonContent(new[] { healthyType });
+        using var healthyResponse = await client.PostAsync("/api/events", healthyContent);
+        var persistedTypes = await WaitForPersistedTypesAsync(new[] { healthyType });
+        var mainQueueInfo = await GetQueueInfoAsync(queueName);
+
+        // Assert
+        Assert.Equal(HttpStatusCode.Accepted, failedResponse.StatusCode);
+        Assert.Equal(Encoding.UTF8.GetBytes(CreateRecordJson(failedType) + "\n"), deadLetteredBody);
+        Assert.Equal(HttpStatusCode.Accepted, healthyResponse.StatusCode);
+        Assert.Equal(new[] { healthyType }, persistedTypes);
+        Assert.Equal(0U, mainQueueInfo.MessageCount);
+    }
+
     #region Test helpers
 
     private PulseFlowWebApplicationFactory<Program> CreateFactory(
         int consumerCount,
-        string queueName)
+        string queueName,
+        Action<IServiceCollection>? configureTestServices = null)
     {
         return new PulseFlowWebApplicationFactory<Program>(
             _postgreSqlFixture.ConnectionString,
             _rabbitMqFixture.ConnectionString,
             queueName,
-            consumerCount);
+            consumerCount,
+            configureTestServices);
     }
 
     private static ByteArrayContent CreateNdjsonContent(IEnumerable<string> types)
@@ -162,6 +203,47 @@ public sealed class RabbitMqAsynchronousIngestionTests :
         return new PulseFlowDbContext(options);
     }
 
+    private async Task<byte[]> WaitForDeadLetterBodyAsync(string deadLetterQueueName)
+    {
+        using var timeoutSource = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var connectionFactory = new ConnectionFactory
+        {
+            Uri = new Uri(_rabbitMqFixture.ConnectionString)
+        };
+        await using var connection = await connectionFactory.CreateConnectionAsync(timeoutSource.Token);
+        await using var channel = await connection.CreateChannelAsync(
+            cancellationToken: timeoutSource.Token);
+
+        while (!timeoutSource.IsCancellationRequested)
+        {
+            var delivery = await channel.BasicGetAsync(
+                deadLetterQueueName,
+                autoAck: true,
+                timeoutSource.Token);
+
+            if (delivery is not null)
+            {
+                return delivery.Body.ToArray();
+            }
+
+            await Task.Delay(TimeSpan.FromMilliseconds(100), timeoutSource.Token);
+        }
+
+        throw new TimeoutException("The failed batch did not reach the dead-letter queue before the timeout.");
+    }
+
+    private async Task<QueueDeclareOk> GetQueueInfoAsync(string queueName)
+    {
+        var connectionFactory = new ConnectionFactory
+        {
+            Uri = new Uri(_rabbitMqFixture.ConnectionString)
+        };
+        await using var connection = await connectionFactory.CreateConnectionAsync();
+        await using var channel = await connection.CreateChannelAsync();
+
+        return await channel.QueueDeclarePassiveAsync(queueName);
+    }
+
     private static string CreateRecordJson(string type)
     {
         return JsonSerializer.Serialize(new
@@ -176,6 +258,30 @@ public sealed class RabbitMqAsynchronousIngestionTests :
     private static string CreateQueueName()
     {
         return $"pulseflow.integration.{Guid.NewGuid():N}";
+    }
+
+    private sealed class FailingEventChunkStore : IEventChunkStore
+    {
+        private readonly PulseFlowDbContext _dbContext;
+        private readonly string _failedType;
+
+        public FailingEventChunkStore(PulseFlowDbContext dbContext, string failedType)
+        {
+            _dbContext = dbContext;
+            _failedType = failedType;
+        }
+
+        public Task StoreAsync(
+            IReadOnlyCollection<PulseFlow.Api.Ingestion.Contracts.EventEnvelope> events,
+            CancellationToken cancellationToken = default)
+        {
+            if (events.Any(@event => @event.Type == _failedType))
+            {
+                throw new InvalidOperationException("The test store failed the batch.");
+            }
+
+            return new EfCoreEventChunkStore(_dbContext).StoreAsync(events, cancellationToken);
+        }
     }
 
     #endregion
