@@ -307,6 +307,7 @@ public sealed class EventParserConsumerTests
     {
         return JsonSerializer.Serialize(new
         {
+            eventId = Guid.NewGuid(),
             type,
             source = "test-source",
             occurredAt = "2026-08-17T10:00:00Z",

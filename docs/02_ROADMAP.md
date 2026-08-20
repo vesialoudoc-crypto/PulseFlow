@@ -194,10 +194,20 @@ workers, waits for their cleanup, and fails the hosted service with the initiati
 exception. A worker that finishes while the host is still running is also treated as a
 failure. There is no automatic worker restart.
 
+The next reliability slice is implemented through Event Contract v2. Every valid event
+has a source-owned UUID `eventId`; the logical identity is `(source, eventId)`. The
+database stores non-null `event_id` and enforces a unique `(source, event_id)` index.
+Each persistence chunk remains one explicit transaction and one PostgreSQL
+`INSERT ... ON CONFLICT (source, event_id) DO NOTHING` command. A valid duplicate is a
+successful no-op, including when a complete batch is replayed after a later chunk
+failed. Missing or malformed event IDs remain record-level invalid outcomes and do not
+dead-letter a whole batch. The real-PostgreSQL tests cover duplicate replay, different
+sources with one UUID, partial chunk replay, and concurrent inserts. See
+[ADR 0011](decisions/0011-use-event-level-idempotency.md).
+
 This is not an end-to-end no-loss, at-least-once, or exactly-once guarantee. RabbitMQ
 dead-letter republishing can fail, and earlier PostgreSQL chunks can already be durable
-when a later chunk fails. Retry, redrive, idempotency, deduplication, Outbox, and
-prefetch remain unresolved.
+when a later chunk fails. Retry, redrive, Outbox, and prefetch remain unresolved.
 
 ## Stage 4: Horizontal Scaling and Load
 
@@ -295,7 +305,6 @@ requirements and not claims about the currently implemented architecture:
 - authentication and authorization;
 - rate limiting and request/input limits;
 - resilience and retry policies where concrete failure behavior justifies them;
-- idempotency and deduplication;
 - Redis-backed distributed ingestion rate limiting when Stage 4 introduces multiple
   `PulseFlow.Api` instances; Redis is not planned as generic caching or batch-status
   storage;

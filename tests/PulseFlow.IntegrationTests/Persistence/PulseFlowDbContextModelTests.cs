@@ -58,6 +58,7 @@ public sealed class PulseFlowDbContextModelTests
 
     [Theory]
     [InlineData(nameof(EventRecord.Id), "id")]
+    [InlineData(nameof(EventRecord.EventId), "event_id")]
     [InlineData(nameof(EventRecord.Type), "type")]
     [InlineData(nameof(EventRecord.Source), "source")]
     [InlineData(nameof(EventRecord.OccurredAt), "occurred_at")]
@@ -83,6 +84,7 @@ public sealed class PulseFlowDbContextModelTests
 
     [Theory]
     [InlineData(nameof(EventRecord.Id), "uuid")]
+    [InlineData(nameof(EventRecord.EventId), "uuid")]
     [InlineData(nameof(EventRecord.Type), "text")]
     [InlineData(nameof(EventRecord.Source), "text")]
     [InlineData(nameof(EventRecord.OccurredAt), "timestamp with time zone")]
@@ -107,6 +109,7 @@ public sealed class PulseFlowDbContextModelTests
 
     [Theory]
     [InlineData(nameof(EventRecord.Id))]
+    [InlineData(nameof(EventRecord.EventId))]
     [InlineData(nameof(EventRecord.Type))]
     [InlineData(nameof(EventRecord.Source))]
     [InlineData(nameof(EventRecord.OccurredAt))]

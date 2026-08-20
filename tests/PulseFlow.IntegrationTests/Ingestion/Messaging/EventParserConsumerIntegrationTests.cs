@@ -96,6 +96,7 @@ public sealed class EventParserConsumerIntegrationTests : IClassFixture<PostgreS
     {
         return JsonSerializer.Serialize(new
         {
+            eventId = Guid.NewGuid(),
             type,
             source = "integration-test-source",
             occurredAt = "2026-08-18T10:00:00Z",

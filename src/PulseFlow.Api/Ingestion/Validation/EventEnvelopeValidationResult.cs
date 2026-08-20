@@ -6,6 +6,9 @@ namespace PulseFlow.Api.Ingestion.Validation;
 public enum EventEnvelopeValidationErrorCode
 {
     RootNotObject,
+    EventIdMissing,
+    EventIdNotString,
+    EventIdInvalidUuid,
     TypeMissing,
     TypeNull,
     TypeNotString,

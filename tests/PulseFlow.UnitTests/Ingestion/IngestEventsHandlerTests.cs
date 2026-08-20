@@ -36,6 +36,55 @@ public sealed class IngestEventsHandlerTests
         Assert.Equal("valid", storedEvent.Type);
     }
 
+    [Fact]
+    public async Task HandleAsync_EventIdIsMissing_RejectsRecordWithoutStoringIt()
+    {
+        // Arrange
+        var input = JsonSerializer.Serialize(new
+        {
+            type = "missing-event-id",
+            source = "test-source",
+            occurredAt = "2026-08-17T10:00:00Z",
+            payload = new { }
+        }) + "\n";
+        var store = new RecordingEventChunkStore();
+        var handler = CreateHandler(store, chunkCapacity: 2);
+
+        // Act
+        var result = await handler.HandleAsync(ReadRecordsAsync(input));
+
+        // Assert
+        Assert.Equal(1, result.Total);
+        Assert.Equal(0, result.Accepted);
+        Assert.Equal(1, result.Rejected);
+        Assert.Empty(store.SuccessfulChunks);
+    }
+
+    [Fact]
+    public async Task HandleAsync_EventIdIsMalformed_RejectsRecordWithoutStoringIt()
+    {
+        // Arrange
+        var input = JsonSerializer.Serialize(new
+        {
+            eventId = "not-a-uuid",
+            type = "malformed-event-id",
+            source = "test-source",
+            occurredAt = "2026-08-17T10:00:00Z",
+            payload = new { }
+        }) + "\n";
+        var store = new RecordingEventChunkStore();
+        var handler = CreateHandler(store, chunkCapacity: 2);
+
+        // Act
+        var result = await handler.HandleAsync(ReadRecordsAsync(input));
+
+        // Assert
+        Assert.Equal(1, result.Total);
+        Assert.Equal(0, result.Accepted);
+        Assert.Equal(1, result.Rejected);
+        Assert.Empty(store.SuccessfulChunks);
+    }
+
     [Theory]
     [InlineData(2, new[] { 2, 2, 1 })]
     [InlineData(3, new[] { 3, 2 })]
@@ -139,6 +188,7 @@ public sealed class IngestEventsHandlerTests
     {
         return JsonSerializer.Serialize(new
         {
+            eventId = Guid.NewGuid(),
             type,
             source = "test-source",
             occurredAt = "2026-08-17T10:00:00Z",

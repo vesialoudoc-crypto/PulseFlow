@@ -130,6 +130,7 @@ public sealed class PulseFlowDbContextPersistenceTests : IClassFixture<PostgreSq
         return new EventRecord
         {
             Id = Guid.NewGuid(),
+            EventId = Guid.NewGuid(),
             Type = "sensor.reading.recorded",
             Source = "urn:pulseflow:test:sensor-17",
             OccurredAt = new DateTime(2026, 8, 16, 9, 10, 11, DateTimeKind.Utc),

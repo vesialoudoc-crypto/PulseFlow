@@ -97,7 +97,8 @@ public sealed class RabbitMqAsynchronousIngestionTests :
         await EnsureDatabaseMigratedAsync(factory.Services);
         var options = factory.Services.GetRequiredService<IOptions<RabbitMqOptions>>().Value;
         using var client = factory.CreateClient();
-        using var failedContent = CreateNdjsonContent(new[] { failedType });
+        var failedBatch = CreateRecordJson(failedType) + "\n";
+        using var failedContent = CreateNdjsonContent(failedBatch);
 
         // Act
         using var failedResponse = await client.PostAsync("/api/events", failedContent);
@@ -109,7 +110,7 @@ public sealed class RabbitMqAsynchronousIngestionTests :
 
         // Assert
         Assert.Equal(HttpStatusCode.Accepted, failedResponse.StatusCode);
-        Assert.Equal(Encoding.UTF8.GetBytes(CreateRecordJson(failedType) + "\n"), deadLetteredBody);
+        Assert.Equal(Encoding.UTF8.GetBytes(failedBatch), deadLetteredBody);
         Assert.Equal(HttpStatusCode.Accepted, healthyResponse.StatusCode);
         Assert.Equal(new[] { healthyType }, persistedTypes);
         Assert.Equal(0U, mainQueueInfo.MessageCount);
@@ -135,6 +136,15 @@ public sealed class RabbitMqAsynchronousIngestionTests :
         var batch = string.Join(
             '\n',
             types.Select(CreateRecordJson).Append(string.Empty));
+        var content = new ByteArrayContent(Encoding.UTF8.GetBytes(batch));
+        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(
+            "application/x-ndjson");
+
+        return content;
+    }
+
+    private static ByteArrayContent CreateNdjsonContent(string batch)
+    {
         var content = new ByteArrayContent(Encoding.UTF8.GetBytes(batch));
         content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(
             "application/x-ndjson");
@@ -248,6 +258,7 @@ public sealed class RabbitMqAsynchronousIngestionTests :
     {
         return JsonSerializer.Serialize(new
         {
+            eventId = Guid.NewGuid(),
             type,
             source = "real-broker-integration-test",
             occurredAt = "2026-08-18T10:00:00Z",

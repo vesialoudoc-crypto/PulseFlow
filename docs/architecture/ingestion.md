@@ -1,10 +1,13 @@
 # Ingestion Architecture
 
-**Status:** Stage 3 terminal rejection and dead-letter slice implemented
+**Status:** Stage 3 terminal rejection and event-level idempotency slices implemented
 
 ## Event record
 
-Each event uses [Event Contract v1](../contracts/event-ingestion-v1.md). Its envelope contains `type`, `source`, `occurredAt`, and an opaque JSON-object `payload`. Batch transport does not change these event-level semantics.
+Each event uses [Event Contract v2](../contracts/event-ingestion-v2.md). Its envelope
+contains a source-owned UUID `eventId`, `type`, `source`, `occurredAt`, and an opaque
+JSON-object `payload`. The logical identity is `(source, eventId)`; batch transport
+does not change these event-level semantics.
 
 The implemented NDJSON reader accepts a `Stream`, frames and parses records
 incrementally, and exposes the ordered outcomes as `IAsyncEnumerable`. A record result
@@ -15,8 +18,8 @@ persistence responsibility.
 The implemented `EventEnvelope`/validation boundary accepts the parsed untrusted
 `JsonElement`. It returns either an immutable valid `EventEnvelope` or
 EventEnvelope-specific coded validation errors. `EventEnvelope` contains non-empty
-`Type` and `Source` strings, a UTC `DateTime` `OccurredAt`, and an opaque object-valued
-`JsonElement` `Payload`. The payload is cloned while the envelope is constructed, so
+`Guid` `EventId`, non-empty `Type` and `Source` strings, a UTC `DateTime` `OccurredAt`,
+and an opaque object-valued `JsonElement` `Payload`. The payload is cloned while the envelope is constructed, so
 it does not borrow the lifetime of the reader result.
 
 The implemented persistence boundary accepts one already-formed collection of valid
@@ -30,7 +33,7 @@ historical evidence of their behavior, not the behavior of the current endpoint.
 
 ## Batch transport
 
-Batch ingestion uses NDJSON with one independent Event Contract v1 record per line. A completely received record is a separate unit of ingestion:
+Batch ingestion uses NDJSON with one independent Event Contract v2 record per line. A completely received record is a separate unit of ingestion:
 
 - LF and CRLF terminate records;
 - a blank line is an empty malformed record rather than ignored input;
@@ -62,7 +65,7 @@ JSON syntax parsing
     ↓
 untrusted parsed JSON record
     ↓
-Event Contract v1 validation
+Event Contract v2 validation
     ↓
 EventEnvelope
     ↓
@@ -80,8 +83,8 @@ validity. A malformed record is yielded as a simple record-level outcome, and la
 records remain readable when the stream itself remains readable.
 
 Separate contract validation inspects the already-parsed representation and
-determines whether it satisfies Event Contract v1: `type`, `source`, `occurredAt`, and
-the requirement that `payload` is a JSON object. It does not serialize and parse the
+determines whether it satisfies Event Contract v2: UUID `eventId`, `type`, `source`,
+`occurredAt`, and the requirement that `payload` is a JSON object. It does not serialize and parse the
 record again. Only successful contract validation constructs `EventEnvelope`; the
 opaque contents of `payload` are not interpreted. The rationale and consequences are
 recorded in [ADR 0003](../decisions/0003-construct-event-envelope-after-contract-validation.md).
@@ -124,8 +127,8 @@ chunks remain durable, while the failing chunk is not accepted. Because there is
 failure result, valid-but-uncommitted records are not misclassified by the derived
 formula. This is the deliberate simple failure model accepted in
 [ADR 0006](../decisions/0006-keep-ingestion-handler-failure-propagation-simple.md),
-not a claim of request-level atomicity. The retry/idempotency problem remains
-unresolved.
+not a claim of request-level atomicity. A later replay with the same `(source, eventId)`
+does not duplicate the earlier committed logical events.
 
 The rationale and consequences are recorded in [ADR 0002](../decisions/0002-use-chunked-postgresql-persistence-for-ingestion.md).
 
@@ -142,15 +145,18 @@ PostgreSQL
 ```
 
 `IEventChunkStore.StoreAsync` accepts an `IReadOnlyCollection<EventEnvelope>` and
-cancellation. The EF Core implementation creates one `EventRecord` per envelope,
-adds the complete supplied collection, and calls `SaveChangesAsync` once. Successful
-completion is the durability boundary for that supplied chunk; cancellation and
-persistence failures propagate.
+cancellation. Its PostgreSQL implementation sends the complete supplied collection as
+one parameterized `INSERT ... VALUES ... ON CONFLICT (source, event_id) DO NOTHING`
+command inside one explicit transaction. Successful completion is the durability
+boundary for that supplied chunk; cancellation and persistence failures propagate.
+The unique index is the concurrency correctness boundary, so duplicates are successful
+no-ops rather than a select-before-insert decision or duplicate-key exception path.
 
 The direct translation is:
 
 ```text
 EventRecord.Id          <- Guid.NewGuid()
+EventRecord.EventId     <- EventEnvelope.EventId
 EventRecord.Type        <- EventEnvelope.Type
 EventRecord.Source      <- EventEnvelope.Source
 EventRecord.OccurredAt  <- EventEnvelope.OccurredAt
@@ -158,7 +164,8 @@ EventRecord.ReceivedAt  <- DateTime.UtcNow
 EventRecord.PayloadJson <- EventEnvelope.Payload JSON
 ```
 
-The payload is passed to the existing PostgreSQL `jsonb` mapping, which preserves its
+`EventRecord.Id` remains the server-generated primary key of one durable row. The
+database also has a unique `(source, event_id)` index. The payload is passed to the existing PostgreSQL `jsonb` mapping, which preserves its
 JSON semantics rather than original whitespace or property order. `Id` and
 `ReceivedAt` are persistence-only metadata and do not become part of `EventEnvelope`.
 The generation decision is recorded in
@@ -249,7 +256,7 @@ EventParserConsumer
     ->
 NDJSON parsing
     ->
-Event Contract v1 validation
+Event Contract v2 validation
     ->
 PostgreSQL
 ```
@@ -312,15 +319,16 @@ call fails. It does not explicitly settle outstanding deliveries during cleanup.
 The dead-letter queue preserves a failed raw batch for investigation, but it does not
 provide an end-to-end no-loss, at-least-once, or exactly-once guarantee. RabbitMQ
 dead-letter republishing can fail depending on broker topology and availability. Earlier
-PostgreSQL chunks can also have committed before a later chunk fails. Replay,
-idempotency, and deduplication are intentionally undefined. The decision and its
-limits are recorded in [ADR 0010](../decisions/0010-dead-letter-unexpected-batch-processing-failures.md).
+PostgreSQL chunks can also have committed before a later chunk fails. Reprocessing a
+batch with the same Contract v2 event identities does not duplicate committed logical
+events because PostgreSQL treats them as no-ops. The decision and its limits are
+recorded in [ADR 0010](../decisions/0010-dead-letter-unexpected-batch-processing-failures.md)
+and [ADR 0011](../decisions/0011-use-event-level-idempotency.md).
 
 Prefetch must be designed after this processing-failure acknowledgement behavior has
 been verified. The current adapter remains unbounded, and this slice does not add
 broker-side flow control. Retry, dead-letter redrive, poison-message handling beyond
-terminal broker retention, Outbox, idempotency, and delivery-guarantee policies remain
-unresolved.
+terminal broker retention, Outbox, and delivery-guarantee policies remain unresolved.
 
 The single hosted service starts one worker for each validated `RabbitMq:ConsumerCount`
 value. Each worker owns an independent consumer channel, while all consumer channels
@@ -342,7 +350,7 @@ tests do not claim an ordering, distribution, or performance characteristic.
 - record, upload, and record-count limits;
 - compression;
 - authentication and authorization;
-- idempotency, deduplication, and client retry behavior;
+- automatic dead-letter redrive and a client retry policy beyond preserving `eventId`;
 - request, batch, and RabbitMQ message-size limits;
 - RabbitMQ routing-key conventions beyond the direct configured-queue publish;
 - acknowledgement/requeue semantics beyond successful manual acknowledgement, retry
@@ -353,12 +361,11 @@ tests do not claim an ordering, distribution, or performance characteristic.
 - batch-status persistence and public status/query endpoint contract;
 - deployment topology for RabbitMQ and parser consumers;
 - a measured and tuned chunk capacity;
-- retry and idempotency behavior for an overall failure after earlier chunks committed;
+- retry behavior for an overall failure after earlier chunks committed;
 - PostgreSQL retry strategy, EF Core execution strategy, and transaction isolation level;
 - production migration execution;
 - the concrete validation library or framework.
 
 Redis is not part of this implementation; it is reserved for Stage 4 distributed
-ingestion rate limiting across multiple `PulseFlow.Api` instances. Outbox,
-idempotency, deduplication, and detailed RabbitMQ reliability choices remain
-unresolved.
+ingestion rate limiting across multiple `PulseFlow.Api` instances. Outbox and detailed
+RabbitMQ reliability choices remain unresolved.

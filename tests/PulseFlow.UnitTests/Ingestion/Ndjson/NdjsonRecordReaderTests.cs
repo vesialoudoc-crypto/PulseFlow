@@ -321,6 +321,7 @@ public sealed class NdjsonRecordReaderTests
     {
         return JsonSerializer.Serialize(new
         {
+            eventId = Guid.NewGuid(),
             type,
             source,
             occurredAt,

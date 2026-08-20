@@ -17,6 +17,11 @@ public sealed class EventRecordConfiguration : IEntityTypeConfiguration<EventRec
             .ValueGeneratedNever()
             .IsRequired();
 
+        builder.Property(eventRecord => eventRecord.EventId)
+            .HasColumnName("event_id")
+            .HasColumnType("uuid")
+            .IsRequired();
+
         builder.Property(eventRecord => eventRecord.Type)
             .HasColumnName("type")
             .HasColumnType("text")
@@ -41,5 +46,8 @@ public sealed class EventRecordConfiguration : IEntityTypeConfiguration<EventRec
             .HasColumnName("payload")
             .HasColumnType("jsonb")
             .IsRequired();
+
+        builder.HasIndex(eventRecord => new { eventRecord.Source, eventRecord.EventId })
+            .IsUnique();
     }
 }

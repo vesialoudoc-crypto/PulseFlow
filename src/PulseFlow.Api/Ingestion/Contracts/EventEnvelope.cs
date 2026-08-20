@@ -2,10 +2,11 @@ using System.Text.Json;
 
 namespace PulseFlow.Api.Ingestion.Contracts;
 
-// Created only after Event Contract v1 validation.
+// Created only after Event Contract v2 validation.
 public sealed class EventEnvelope
 {
     internal EventEnvelope(
+        Guid eventId,
         string type,
         string source,
         DateTime occurredAt,
@@ -31,6 +32,7 @@ public sealed class EventEnvelope
             throw new ArgumentException("Event payload must be a JSON object.", nameof(payload));
         }
 
+        EventId = eventId;
         Type = type;
         Source = source;
         OccurredAt = occurredAt;
@@ -38,6 +40,8 @@ public sealed class EventEnvelope
         // Keep the payload valid after the input JsonDocument is disposed.
         Payload = payload.Clone();
     }
+
+    public Guid EventId { get; }
 
     public string Type { get; }
 

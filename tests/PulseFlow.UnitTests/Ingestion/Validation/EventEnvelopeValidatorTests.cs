@@ -37,6 +37,7 @@ public sealed class EventEnvelopeValidatorTests
         // Arrange
         var record = JsonSerializer.SerializeToElement(new
         {
+            eventId = Guid.NewGuid(),
             source = "billing-service",
             occurredAt = "2026-08-15T17:20:00Z",
             payload = new { }
@@ -81,6 +82,7 @@ public sealed class EventEnvelopeValidatorTests
         // Arrange
         var record = JsonSerializer.SerializeToElement(new
         {
+            eventId = Guid.NewGuid(),
             type = "payment.completed",
             occurredAt = "2026-08-15T17:20:00Z",
             payload = new { }
@@ -125,6 +127,7 @@ public sealed class EventEnvelopeValidatorTests
         // Arrange
         var record = JsonSerializer.SerializeToElement(new
         {
+            eventId = Guid.NewGuid(),
             type = "payment.completed",
             source = "billing-service",
             payload = new { }
@@ -215,6 +218,7 @@ public sealed class EventEnvelopeValidatorTests
         // Arrange
         var record = JsonSerializer.SerializeToElement(new
         {
+            eventId = Guid.NewGuid(),
             type = "payment.completed",
             source = "billing-service",
             occurredAt = "2026-08-15T17:20:00Z"
@@ -349,6 +353,56 @@ public sealed class EventEnvelopeValidatorTests
     }
 
     [Fact]
+    public void Validate_EventIdIsMissing_ReturnsEventIdMissingError()
+    {
+        // Arrange
+        var record = CreateRecord(includeEventId: false);
+        var expectedErrors = new[]
+        {
+            (EventEnvelopeValidationErrorCode.EventIdMissing, "$.eventId")
+        };
+
+        // Act
+        var result = _validator.Validate(record);
+
+        // Assert
+        Assert.Equal(expectedErrors, GetErrors(result));
+    }
+
+    [Theory]
+    [InlineData("null", EventEnvelopeValidationErrorCode.EventIdNotString)]
+    [InlineData("42", EventEnvelopeValidationErrorCode.EventIdNotString)]
+    [InlineData("\"not-a-uuid\"", EventEnvelopeValidationErrorCode.EventIdInvalidUuid)]
+    public void Validate_EventIdIsInvalid_ReturnsExpectedEventIdError(
+        string eventIdJson,
+        EventEnvelopeValidationErrorCode expectedCode)
+    {
+        // Arrange
+        var record = CreateRecord(eventId: ParseJsonValue(eventIdJson));
+        var expectedErrors = new[] { (expectedCode, "$.eventId") };
+
+        // Act
+        var result = _validator.Validate(record);
+
+        // Assert
+        Assert.Equal(expectedErrors, GetErrors(result));
+    }
+
+    [Fact]
+    public void Validate_RecordIsValid_ReturnsExpectedEventId()
+    {
+        // Arrange
+        var eventId = Guid.Parse("f5b60e24-e97d-4b24-9838-7e1b1cd69621");
+        var record = CreateRecord(eventId: JsonSerializer.SerializeToElement(eventId));
+
+        // Act
+        var result = _validator.Validate(record);
+
+        // Assert
+        Assert.Equal(eventId, result.Envelope?.EventId);
+    }
+
+    [Fact]
     public void Validate_RecordIsValid_ReturnsExpectedSource()
     {
         // Arrange
@@ -404,6 +458,7 @@ public sealed class EventEnvelopeValidatorTests
         var expectedPayload = JsonSerializer.SerializeToNode(payload);
         var json = JsonSerializer.Serialize(new
         {
+            eventId = Guid.NewGuid(),
             type = "payment.completed",
             source = "billing-service",
             occurredAt = "2026-08-15T17:20:00Z",
@@ -430,6 +485,7 @@ public sealed class EventEnvelopeValidatorTests
         var record = JsonSerializer.SerializeToElement(new { });
         var expectedErrors = new[]
         {
+            (EventEnvelopeValidationErrorCode.EventIdMissing, "$.eventId"),
             (EventEnvelopeValidationErrorCode.TypeMissing, "$.type"),
             (EventEnvelopeValidationErrorCode.SourceMissing, "$.source"),
             (EventEnvelopeValidationErrorCode.OccurredAtMissing, "$.occurredAt"),
@@ -446,19 +502,27 @@ public sealed class EventEnvelopeValidatorTests
     #region Test helpers
 
     private static JsonElement CreateRecord(
+        JsonElement? eventId = null,
         JsonElement? type = null,
         JsonElement? source = null,
         JsonElement? occurredAt = null,
-        JsonElement? payload = null)
+        JsonElement? payload = null,
+        bool includeEventId = true)
     {
         var record = new Dictionary<string, JsonElement>
         {
-            ["type"] = type ?? JsonSerializer.SerializeToElement("payment.completed"),
             ["source"] = source ?? JsonSerializer.SerializeToElement("billing-service"),
             ["occurredAt"] = occurredAt ??
                 JsonSerializer.SerializeToElement("2026-08-15T17:20:00Z"),
             ["payload"] = payload ?? JsonSerializer.SerializeToElement(new { })
         };
+
+        if (includeEventId)
+        {
+            record["eventId"] = eventId ?? JsonSerializer.SerializeToElement(Guid.NewGuid());
+        }
+
+        record["type"] = type ?? JsonSerializer.SerializeToElement("payment.completed");
 
         return JsonSerializer.SerializeToElement(record);
     }

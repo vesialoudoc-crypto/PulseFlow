@@ -5,7 +5,7 @@ using PulseFlow.Api.Ingestion.Contracts;
 
 namespace PulseFlow.Api.Ingestion.Validation;
 
-// Validates parsed JSON against Event Contract v1.
+// Validates parsed JSON against Event Contract v2.
 public sealed class EventEnvelopeValidator
 {
     // TryParse alone accepts formats outside RFC 3339.
@@ -23,6 +23,7 @@ public sealed class EventEnvelopeValidator
 
         // Collect all field errors for this record.
         var errors = new List<EventEnvelopeValidationError>();
+        var eventId = ValidateEventId(record, errors);
         var type = ValidateRequiredNonEmptyString(
             record,
             "type",
@@ -47,9 +48,41 @@ public sealed class EventEnvelopeValidator
             return EventEnvelopeValidationResult.Invalid(errors);
         }
 
-        var envelope = new EventEnvelope(type!, source!, occurredAt!.Value, payload!.Value);
+        var envelope = new EventEnvelope(
+            eventId!.Value,
+            type!,
+            source!,
+            occurredAt!.Value,
+            payload!.Value);
 
         return EventEnvelopeValidationResult.Valid(envelope);
+    }
+
+    private static Guid? ValidateEventId(
+        JsonElement record,
+        ICollection<EventEnvelopeValidationError> errors)
+    {
+        const string JsonPath = "$.eventId";
+
+        if (!record.TryGetProperty("eventId", out var property))
+        {
+            errors.Add(CreateError(EventEnvelopeValidationErrorCode.EventIdMissing, JsonPath));
+            return null;
+        }
+
+        if (property.ValueKind != JsonValueKind.String)
+        {
+            errors.Add(CreateError(EventEnvelopeValidationErrorCode.EventIdNotString, JsonPath));
+            return null;
+        }
+
+        if (!Guid.TryParse(property.GetString(), out var eventId))
+        {
+            errors.Add(CreateError(EventEnvelopeValidationErrorCode.EventIdInvalidUuid, JsonPath));
+            return null;
+        }
+
+        return eventId;
     }
 
     private static string? ValidateRequiredNonEmptyString(

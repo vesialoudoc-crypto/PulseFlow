@@ -1,10 +1,11 @@
 # Event Ingestion Contract v1
 
-**Status:** Accepted and implemented
-**Implementation:** The accepted Event Contract v1 envelope and its reusable parsing,
-validation, and persistence components are implemented. `POST /api/events` accepts
-the complete raw NDJSON batch for asynchronous RabbitMQ processing; record-level
-outcomes are not available in the HTTP response.
+**Status:** Superseded by Event Contract v2
+**Implementation:** This is historical documentation for the former implemented
+contract. The current ingestion implementation uses
+[Event Contract v2](event-ingestion-v2.md) at the unchanged `POST /api/events`
+endpoint. This educational project has no external v1 clients that require concurrent
+compatibility.
 
 ## Purpose
 
