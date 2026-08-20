@@ -49,13 +49,15 @@ not have genuine source-provided identities.
 - Different sources can use the same `eventId`.
 - Normal ingestion accounting remains unchanged: a valid duplicate is successfully
   handled, and no public duplicate count or batch-status API is added.
-- The current RabbitMQ topology, acknowledgement/rejection behavior, retry policy,
-  prefetch, and dead-letter policy are unchanged.
+- The current RabbitMQ topology, acknowledgement/rejection behavior, prefetch, and
+  dead-letter topology are unchanged. One transient `NpgsqlException` processing
+  failure is retried once in process; the full raw batch is replayed with its original
+  event identities.
 
 ## Explicit limitations
 
 - This is not exactly-once RabbitMQ delivery or exactly-once processing.
-- There is no automatic dead-letter redrive or retry policy.
+- There are no retry queues, automatic dead-letter redrive, or exactly-once guarantee.
 - A sender that does not preserve `eventId` on resend defeats event-level idempotency.
 - No processed-batches table, Inbox, Outbox, Redis deduplication, distributed lock,
   batch idempotency key, or `Idempotency-Key` HTTP header is introduced.

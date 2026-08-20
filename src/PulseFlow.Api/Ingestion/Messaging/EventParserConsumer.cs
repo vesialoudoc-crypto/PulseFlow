@@ -1,4 +1,5 @@
 using Microsoft.Extensions.DependencyInjection;
+using Npgsql;
 using PulseFlow.Api.Ingestion;
 using PulseFlow.Api.Ingestion.Ndjson;
 using System.Runtime.ExceptionServices;
@@ -7,6 +8,8 @@ namespace PulseFlow.Api.Ingestion.Messaging;
 
 public sealed class EventParserConsumer : BackgroundService
 {
+    private static readonly TimeSpan TransientProcessingRetryDelay = TimeSpan.FromMilliseconds(100);
+
     private readonly IIngestionBatchConsumerFactory _consumerFactory;
     private readonly IServiceScopeFactory _scopeFactory;
     private readonly NdjsonRecordReader _recordReader;
@@ -119,29 +122,65 @@ public sealed class EventParserConsumer : BackgroundService
     {
         try
         {
-            // Each message needs its own scoped database services.
-            await using var scope = _scopeFactory.CreateAsyncScope();
-            var handler = scope.ServiceProvider.GetRequiredService<IngestEventsHandler>();
-            await using var stream = new MemoryStream(delivery.Body.ToArray(), writable: false);
-            var records = _recordReader.ReadAsync(stream, cancellationToken);
-
-            // Keep the already tested parsing and storage rules in one place.
-            await handler.HandleAsync(records, cancellationToken);
+            await ProcessBatchAsync(delivery.Body, cancellationToken);
         }
         catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
         {
             throw;
         }
+        catch (NpgsqlException exception) when (exception.IsTransient)
+        {
+            _logger.LogWarning(
+                exception,
+                "Event parser consumer processing failed transiently; retrying the complete batch once.");
+
+            try
+            {
+                await Task.Delay(TransientProcessingRetryDelay, cancellationToken);
+                await ProcessBatchAsync(delivery.Body, cancellationToken);
+            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested)
+            {
+                throw;
+            }
+            catch (Exception retryException)
+            {
+                await RejectAfterProcessingFailureAsync(delivery, retryException, cancellationToken);
+                return;
+            }
+        }
         catch (Exception exception)
         {
-            _logger.LogError(
-                exception,
-                "Event parser consumer processing failed; terminal rejection is being attempted.");
-            await delivery.RejectAsync(cancellationToken);
+            await RejectAfterProcessingFailureAsync(delivery, exception, cancellationToken);
             return;
         }
 
         // RabbitMQ can forget this batch only after processing and scoped services finish.
         await delivery.AcknowledgeAsync(cancellationToken);
+    }
+
+    private async Task ProcessBatchAsync(
+        ReadOnlyMemory<byte> body,
+        CancellationToken cancellationToken)
+    {
+        // Each attempt needs its own scoped database services and unread raw batch stream.
+        await using var scope = _scopeFactory.CreateAsyncScope();
+        var handler = scope.ServiceProvider.GetRequiredService<IngestEventsHandler>();
+        await using var stream = new MemoryStream(body.ToArray(), writable: false);
+        var records = _recordReader.ReadAsync(stream, cancellationToken);
+
+        // Keep the already tested parsing and storage rules in one place.
+        await handler.HandleAsync(records, cancellationToken);
+    }
+
+    private async Task RejectAfterProcessingFailureAsync(
+        IngestionBatchDelivery delivery,
+        Exception exception,
+        CancellationToken cancellationToken)
+    {
+        _logger.LogError(
+            exception,
+            "Event parser consumer processing failed; terminal rejection is being attempted.");
+        await delivery.RejectAsync(cancellationToken);
     }
 }

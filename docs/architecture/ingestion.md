@@ -1,6 +1,6 @@
 # Ingestion Architecture
 
-**Status:** Stage 3 terminal rejection and event-level idempotency slices implemented
+**Status:** Stage 3 terminal rejection, bounded transient PostgreSQL retry, and event-level idempotency slices implemented
 
 ## Event record
 
@@ -292,19 +292,23 @@ boundary, but it is not a production throughput or memory guarantee and does not
 provide complete consumer flow control. Broker-side flow control through RabbitMQ
 prefetch is intentionally deferred.
 
-For each delivery, the consumer creates an asynchronous DI scope, resolves the scoped
-`IngestEventsHandler` and its EF Core persistence dependencies from that scope, exposes
-the copied raw batch through a `MemoryStream`, and passes it to the singleton
-`NdjsonRecordReader`. The handler retains the established Stage 1 validation,
-chunking, and persistence semantics. The consumer acknowledges the delivery only
-after the handler completes successfully.
+For each processing attempt, the consumer creates an asynchronous DI scope, resolves
+the scoped `IngestEventsHandler` and its EF Core persistence dependencies from that
+scope, exposes the copied raw batch through a fresh `MemoryStream`, and passes it to a
+fresh `NdjsonRecordReader` sequence. The handler retains the established Stage 1
+validation, chunking, and persistence semantics. The consumer acknowledges the
+delivery only after the handler completes successfully.
 
-If unexpected parsing or persistence processing fails, the consumer logs the exception
-and terminally rejects that delivery. The RabbitMQ adapter performs this as a
-single-delivery reject with `requeue = false`, which routes the batch to the configured
-dead-letter queue. There are zero automatic retries, no requeue, and no automatic
-redrive. This allows later healthy deliveries to continue without automatically
-replaying a whole batch that may already have partly persisted.
+If processing fails with an `NpgsqlException` for which `IsTransient` is `true`, the
+consumer logs one warning, waits a short fixed in-process delay, and makes exactly one
+fresh attempt for the complete raw batch. The retry reconstructs the scope, handler,
+stream, and NDJSON sequence rather than reusing a consumed stream. Event-level
+idempotency makes chunks committed before the failed attempt duplicate no-ops during
+that replay. A retry that fails, or any non-transient processing failure, logs the
+final failure and terminally rejects that delivery. The RabbitMQ adapter performs this
+as a single-delivery reject with `requeue = false`, which routes the batch to the
+configured dead-letter queue. There are no retry queues, `requeue = true`, or automatic
+redrive operations. This does not provide exactly-once processing.
 
 Malformed NDJSON records and contract-invalid records remain normal record-level
 outcomes inside the existing handler. They do not cause the complete RabbitMQ batch to
@@ -327,8 +331,9 @@ and [ADR 0011](../decisions/0011-use-event-level-idempotency.md).
 
 Prefetch must be designed after this processing-failure acknowledgement behavior has
 been verified. The current adapter remains unbounded, and this slice does not add
-broker-side flow control. Retry, dead-letter redrive, poison-message handling beyond
-terminal broker retention, Outbox, and delivery-guarantee policies remain unresolved.
+broker-side flow control. Retry queues, dead-letter redrive, poison-message handling
+beyond terminal broker retention, Outbox, and delivery-guarantee policies remain
+unresolved.
 
 The single hosted service starts one worker for each validated `RabbitMq:ConsumerCount`
 value. Each worker owns an independent consumer channel, while all consumer channels

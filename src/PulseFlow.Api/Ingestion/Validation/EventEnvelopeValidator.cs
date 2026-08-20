@@ -164,7 +164,7 @@ public sealed class EventEnvelopeValidator
 
         if (!value.EndsWith('Z'))
         {
-            // Event Contract v1 requires the UTC Z suffix.
+            // Event Contract v2 requires the UTC Z suffix.
             errors.Add(CreateError(
                 EventEnvelopeValidationErrorCode.OccurredAtNotUtcZ,
                 JsonPath));

@@ -42,10 +42,13 @@ arguments. A durable direct dead-letter exchange and a durable dead-letter queue
 declared from the configured queue name. The dead-letter queue is bound with the
 explicit dead-letter routing key.
 
-There are zero automatic retries and no automatic dead-letter redrive in this slice.
-Successful processing still acknowledges the delivery only after the ingestion handler
-completes. Host shutdown cancellation remains normal shutdown behavior and does not
-reject a delivery.
+For one transient `NpgsqlException` processing failure, the consumer waits a short
+fixed delay and retries the complete raw batch once using fresh scoped processing
+state. If that retry fails, the same terminal rejection applies. Other processing
+failures receive no retry, and there are no retry queues, requeue operations, or
+automatic dead-letter redrive in this slice. Successful processing still acknowledges
+the delivery only after the ingestion handler completes. Host shutdown cancellation
+remains normal shutdown behavior and does not reject a delivery.
 
 The hosted parser consumer supervises all configured workers as one unit. If a worker
 fails in RabbitMQ consumption, acknowledgement, rejection, consumer creation, or other
@@ -75,6 +78,6 @@ running is treated the same way. This slice does not restart workers automatical
   dead-letter republishing can fail for some broker topologies and availability states.
 - Earlier PostgreSQL chunks may already be persisted when the batch is rejected.
 - Replay and redrive behavior are intentionally undefined.
-- Retry, idempotency, deduplication, Outbox, and delivery guarantees remain unresolved.
+- Retry queues, automatic redrive, Outbox, and delivery guarantees remain unresolved.
 - RabbitMQ prefetch remains unresolved until after this failure policy is implemented.
 - This decision does not introduce quorum queues.

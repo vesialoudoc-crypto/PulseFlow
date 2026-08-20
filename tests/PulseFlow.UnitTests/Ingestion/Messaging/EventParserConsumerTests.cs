@@ -4,6 +4,7 @@ using System.Threading.Channels;
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Npgsql;
 using PulseFlow.Api.Ingestion;
 using PulseFlow.Api.Ingestion.Contracts;
 using PulseFlow.Api.Ingestion.Messaging;
@@ -73,7 +74,42 @@ public sealed class EventParserConsumerTests
     }
 
     [Fact]
-    public async Task EventParserConsumer_UnexpectedPersistenceFailure_RejectsDeliveryWithoutAcknowledging()
+    public async Task EventParserConsumer_TransientPersistenceFailureThenSuccess_RetriesOnceAndAcknowledgesDelivery()
+    {
+        // Arrange
+        var store = new RecordingEventChunkStore(
+            CreateTransientNpgsqlException("Transient persistence failure."));
+        await using var testContext = CreateTestContext(store);
+
+        // Act
+        await testContext.DeliverAsync(Encoding.UTF8.GetBytes(CreateRecordJson("valid") + "\n"));
+
+        // Assert
+        Assert.Equal(2, store.AttemptCount);
+        Assert.Equal(1, testContext.Consumer.AcknowledgementCount);
+        Assert.Equal(0, testContext.Consumer.RejectionCount);
+    }
+
+    [Fact]
+    public async Task EventParserConsumer_TransientPersistenceFailureTwice_RetriesOnceThenRejectsDelivery()
+    {
+        // Arrange
+        var store = new RecordingEventChunkStore(
+            CreateTransientNpgsqlException("First transient persistence failure."),
+            CreateTransientNpgsqlException("Second transient persistence failure."));
+        await using var testContext = CreateTestContext(store);
+
+        // Act
+        await testContext.DeliverAsync(Encoding.UTF8.GetBytes(CreateRecordJson("valid") + "\n"));
+
+        // Assert
+        Assert.Equal(2, store.AttemptCount);
+        Assert.Equal(0, testContext.Consumer.AcknowledgementCount);
+        Assert.Equal(1, testContext.Consumer.RejectionCount);
+    }
+
+    [Fact]
+    public async Task EventParserConsumer_NonTransientPersistenceFailure_RejectsDeliveryWithoutRetrying()
     {
         // Arrange
         var store = new RecordingEventChunkStore(new InvalidOperationException("Persistence failed."));
@@ -83,6 +119,7 @@ public sealed class EventParserConsumerTests
         await testContext.DeliverAsync(Encoding.UTF8.GetBytes(CreateRecordJson("valid") + "\n"));
 
         // Assert
+        Assert.Equal(1, store.AttemptCount);
         Assert.Equal(0, testContext.Consumer.AcknowledgementCount);
         Assert.Equal(1, testContext.Consumer.RejectionCount);
     }
@@ -138,6 +175,7 @@ public sealed class EventParserConsumerTests
         await testContext.StopAsync();
 
         // Assert
+        Assert.Equal(1, store.AttemptCount);
         Assert.Equal(0, testContext.Consumer.AcknowledgementCount);
         Assert.Equal(0, testContext.Consumer.RejectionCount);
     }
@@ -313,6 +351,11 @@ public sealed class EventParserConsumerTests
             occurredAt = "2026-08-17T10:00:00Z",
             payload = payload ?? new { sequence = type }
         });
+    }
+
+    private static NpgsqlException CreateTransientNpgsqlException(string message)
+    {
+        return new NpgsqlException(message, new TimeoutException());
     }
 
     private sealed class ConsumerTestContext : IAsyncDisposable
@@ -571,16 +614,29 @@ public sealed class EventParserConsumerTests
 
     private sealed class RecordingEventChunkStore : IEventChunkStore
     {
-        private readonly Exception? _exception;
+        private readonly Queue<Exception?> _attemptExceptions;
         private readonly bool _waitForCancellation;
 
         public RecordingEventChunkStore(
-            Exception? exception = null,
+            params Exception?[] attemptExceptions)
+            : this(attemptExceptions, waitForCancellation: false)
+        {
+        }
+
+        public RecordingEventChunkStore(bool waitForCancellation)
+            : this([], waitForCancellation)
+        {
+        }
+
+        private RecordingEventChunkStore(
+            IEnumerable<Exception?> attemptExceptions,
             bool waitForCancellation = false)
         {
-            _exception = exception;
+            _attemptExceptions = new Queue<Exception?>(attemptExceptions);
             _waitForCancellation = waitForCancellation;
         }
+
+        public int AttemptCount { get; private set; }
 
         public List<IReadOnlyList<EventEnvelope>> SuccessfulChunks { get; } = [];
 
@@ -591,16 +647,17 @@ public sealed class EventParserConsumerTests
             IReadOnlyCollection<EventEnvelope> events,
             CancellationToken cancellationToken = default)
         {
-            StoreAttempted.SetResult();
+            AttemptCount++;
+            StoreAttempted.TrySetResult();
 
             if (_waitForCancellation)
             {
                 await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             }
 
-            if (_exception is not null)
+            if (_attemptExceptions.TryDequeue(out var exception) && exception is not null)
             {
-                throw _exception;
+                throw exception;
             }
 
             SuccessfulChunks.Add(events.ToArray());

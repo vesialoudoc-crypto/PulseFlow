@@ -223,7 +223,7 @@ public sealed class EfCoreEventChunkStoreTests : IClassFixture<PostgreSqlFixture
         var validationResult = new EventEnvelopeValidator().Validate(document.RootElement);
 
         return validationResult.Envelope
-            ?? throw new InvalidOperationException("The test input must be a valid Event Contract v1 envelope.");
+            ?? throw new InvalidOperationException("The test input must be a valid Event Contract v2 envelope.");
     }
 
     #endregion

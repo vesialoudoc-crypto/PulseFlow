@@ -177,10 +177,12 @@ Automated or reproducible checks exist for a documented set of failures and repe
 The first reliability slice is implemented. For an unexpected parsing or PostgreSQL
 persistence failure, `EventParserConsumer` logs the failure, rejects only that RabbitMQ
 delivery with `requeue = false`, and routes it to a durable dedicated dead-letter queue.
-There are zero automatic retries or redrive operations. Successful processing still
-acknowledges only after the handler completes; shutdown cancellation does not reject a
-delivery. Malformed NDJSON and contract-invalid records remain record-level outcomes
-inside the established pipeline and do not dead-letter the whole batch.
+One transient `NpgsqlException` processing failure receives one in-process retry of the
+complete raw batch after a short fixed delay; an exhausted retry uses the same terminal
+rejection path. Successful processing still acknowledges only after the handler
+completes; shutdown cancellation does not reject a delivery. Malformed NDJSON and
+contract-invalid records remain record-level outcomes inside the established pipeline
+and do not dead-letter the whole batch.
 
 The main queue uses application-owned dead-letter queue arguments. An existing local
 queue that was declared before this change must be recreated manually because RabbitMQ
@@ -207,7 +209,7 @@ sources with one UUID, partial chunk replay, and concurrent inserts. See
 
 This is not an end-to-end no-loss, at-least-once, or exactly-once guarantee. RabbitMQ
 dead-letter republishing can fail, and earlier PostgreSQL chunks can already be durable
-when a later chunk fails. Retry, redrive, Outbox, and prefetch remain unresolved.
+when a later chunk fails. Retry queues, redrive, Outbox, and prefetch remain unresolved.
 
 ## Stage 4: Horizontal Scaling and Load
 
