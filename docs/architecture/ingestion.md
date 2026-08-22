@@ -1,6 +1,6 @@
 # Ingestion Architecture
 
-**Status:** Stage 3 terminal rejection, bounded transient PostgreSQL retry, and event-level idempotency slices implemented
+**Status:** Stage 3 terminal rejection and event-level idempotency slices implemented
 
 ## Event record
 
@@ -273,42 +273,36 @@ not share the publisher channel. The adapter consumes the configured durable que
 manual acknowledgement and copies the RabbitMQ body before processing because
 RabbitMQ.Client only guarantees the delivered memory during the callback.
 
-The hosted service supervises its workers as one unit. When a worker faults or finishes
-before host shutdown, it cancels the linked worker lifetime, waits for every worker to
-finish disposal, and then propagates the original initiating exception. This includes
-RabbitMQ consumption, settlement, channel, and consumer-creation failures. Failures
-during sibling cleanup do not replace the initiating failure. There is no worker restart.
+The hosted service starts exactly `RabbitMq:ConsumerCount` workers, gives every worker
+the host stopping token, and awaits all worker tasks with `Task.WhenAll`. It does not
+coordinate worker failures, cancel siblings, restart workers, or add health or recovery
+behavior. A worker exception naturally faults the `BackgroundService` after all worker
+tasks complete. A normally completed worker is not treated as a special failure. This
+lifecycle is recorded in
+[ADR 0013](../decisions/0013-use-backgroundservice-worker-lifecycle.md).
 
-The application-facing consumer boundary is an `IAsyncEnumerable<IngestionBatchDelivery>`.
-`IngestionBatchDelivery` exposes only the raw batch body, an acknowledgement method,
-and a terminal rejection method.
-RabbitMQ's callback model, delivery tag, `IConnection`, `IChannel`, and basic consume
-and acknowledgement calls remain inside the RabbitMQ adapter. The adapter translates
-the RabbitMQ callback into the async stream through `System.Threading.Channels`.
-`RabbitMqIngestionBatchConsumer` copies each delivery body and writes it to an
-unbounded application channel. RabbitMQ.Client 7.2.2 also uses an internal unbounded
-consumer-dispatch work channel. This buffering supports the current Stage 2 adapter
-boundary, but it is not a production throughput or memory guarantee and does not
-provide complete consumer flow control. Broker-side flow control through RabbitMQ
-prefetch is intentionally deferred.
+The application-facing consumer boundary is callback-based:
+`IIngestionBatchConsumer.ConsumeAsync` receives a handler for each
+`IngestionBatchDelivery`. `IngestionBatchDelivery` exposes only the raw batch body,
+an acknowledgement method, and a terminal rejection method. RabbitMQ's callback
+model, delivery tag, `IConnection`, `IChannel`, and basic consume and acknowledgement
+calls remain inside the RabbitMQ adapter. `RabbitMqIngestionBatchConsumer` copies the
+delivery body and invokes the application handler directly; it does not introduce an
+application-level queue or buffer. Broker-side flow control through RabbitMQ prefetch
+is intentionally deferred.
 
-For each processing attempt, the consumer creates an asynchronous DI scope, resolves
+For each delivery, the consumer creates an asynchronous DI scope, resolves
 the scoped `IngestEventsHandler` and its EF Core persistence dependencies from that
 scope, exposes the copied raw batch through a fresh `MemoryStream`, and passes it to a
 fresh `NdjsonRecordReader` sequence. The handler retains the established Stage 1
 validation, chunking, and persistence semantics. The consumer acknowledges the
 delivery only after the handler completes successfully.
 
-If processing fails with an `NpgsqlException` for which `IsTransient` is `true`, the
-consumer logs one warning, waits a short fixed in-process delay, and makes exactly one
-fresh attempt for the complete raw batch. The retry reconstructs the scope, handler,
-stream, and NDJSON sequence rather than reusing a consumed stream. Event-level
-idempotency makes chunks committed before the failed attempt duplicate no-ops during
-that replay. A retry that fails, or any non-transient processing failure, logs the
-final failure and terminally rejects that delivery. The RabbitMQ adapter performs this
-as a single-delivery reject with `requeue = false`, which routes the batch to the
-configured dead-letter queue. There are no retry queues, `requeue = true`, or automatic
-redrive operations. This does not provide exactly-once processing.
+Any processing failure logs the failure and terminally rejects that delivery. The
+RabbitMQ adapter performs this as a single-delivery reject with `requeue = false`,
+which routes the batch to the configured dead-letter queue. The consumer does not make
+an in-process PostgreSQL or batch retry. There are no retry queues, `requeue = true`,
+or automatic redrive operations. This does not provide exactly-once processing.
 
 Malformed NDJSON records and contract-invalid records remain normal record-level
 outcomes inside the existing handler. They do not cause the complete RabbitMQ batch to
@@ -326,14 +320,13 @@ dead-letter republishing can fail depending on broker topology and availability.
 PostgreSQL chunks can also have committed before a later chunk fails. Reprocessing a
 batch with the same Contract v2 event identities does not duplicate committed logical
 events because PostgreSQL treats them as no-ops. The decision and its limits are
-recorded in [ADR 0010](../decisions/0010-dead-letter-unexpected-batch-processing-failures.md)
+recorded in [ADR 0012](../decisions/0012-process-each-rabbitmq-delivery-once.md)
 and [ADR 0011](../decisions/0011-use-event-level-idempotency.md).
 
 Prefetch must be designed after this processing-failure acknowledgement behavior has
-been verified. The current adapter remains unbounded, and this slice does not add
-broker-side flow control. Retry queues, dead-letter redrive, poison-message handling
-beyond terminal broker retention, Outbox, and delivery-guarantee policies remain
-unresolved.
+been verified. This slice does not add broker-side flow control. Retry queues,
+dead-letter redrive, poison-message handling beyond terminal broker retention, Outbox,
+and delivery-guarantee policies remain unresolved.
 
 The single hosted service starts one worker for each validated `RabbitMq:ConsumerCount`
 value. Each worker owns an independent consumer channel, while all consumer channels
@@ -347,8 +340,8 @@ Testcontainers. The test starts both containers, starts the real application wit
 generated isolated queue name, posts `application/x-ndjson` to `POST /api/events`,
 asserts HTTP 202, and polls PostgreSQL with a bounded 15-second timeout until the
 expected rows appear. A focused real-broker test also verifies that `ConsumerCount = 2`
-starts two workers with different consumer channels from the shared connection. These
-tests do not claim an ordering, distribution, or performance characteristic.
+registers two consumers on the configured queue by polling RabbitMQ queue metadata.
+These tests do not claim an ordering, distribution, or performance characteristic.
 
 ## Not yet defined
 
@@ -361,8 +354,7 @@ tests do not claim an ordering, distribution, or performance characteristic.
 - acknowledgement/requeue semantics beyond successful manual acknowledgement, retry
   policy, dead-letter queues, poison-message handling, and delivery guarantees;
 - broker-side flow control and RabbitMQ prefetch, which must follow the processing-
-  failure acknowledgement decision rather than being inferred from the current
-  unbounded buffering;
+  failure acknowledgement decision;
 - batch-status persistence and public status/query endpoint contract;
 - deployment topology for RabbitMQ and parser consumers;
 - a measured and tuned chunk capacity;

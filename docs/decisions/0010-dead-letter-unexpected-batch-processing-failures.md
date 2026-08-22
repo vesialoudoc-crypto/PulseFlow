@@ -4,7 +4,8 @@
 
 ## Status
 
-Accepted
+Superseded in part by [ADR 0012](0012-process-each-rabbitmq-delivery-once.md) and
+[ADR 0013](0013-use-backgroundservice-worker-lifecycle.md)
 
 ## Context
 
@@ -50,11 +51,9 @@ automatic dead-letter redrive in this slice. Successful processing still acknowl
 the delivery only after the ingestion handler completes. Host shutdown cancellation
 remains normal shutdown behavior and does not reject a delivery.
 
-The hosted parser consumer supervises all configured workers as one unit. If a worker
-fails in RabbitMQ consumption, acknowledgement, rejection, consumer creation, or other
-consumer infrastructure, it cancels sibling workers, waits for their cleanup, and
-propagates the initiating exception. A worker that finishes while the host is still
-running is treated the same way. This slice does not restart workers automatically.
+At the time of this decision, the hosted parser consumer also supervised all configured
+workers as one unit. That lifecycle behavior is superseded by ADR 0013; worker lifetime
+now follows normal `BackgroundService` and host cancellation behavior.
 
 ## Consequences
 

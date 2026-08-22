@@ -2,6 +2,7 @@ namespace PulseFlow.Api.Ingestion.Messaging;
 
 public interface IIngestionBatchConsumer : IAsyncDisposable
 {
-    IAsyncEnumerable<IngestionBatchDelivery> ReadAllAsync(
+    Task ConsumeAsync(
+        IngestionBatchHandler handler,
         CancellationToken cancellationToken);
 }

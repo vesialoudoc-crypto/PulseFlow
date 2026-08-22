@@ -50,9 +50,8 @@ not have genuine source-provided identities.
 - Normal ingestion accounting remains unchanged: a valid duplicate is successfully
   handled, and no public duplicate count or batch-status API is added.
 - The current RabbitMQ topology, acknowledgement/rejection behavior, prefetch, and
-  dead-letter topology are unchanged. One transient `NpgsqlException` processing
-  failure is retried once in process; the full raw batch is replayed with its original
-  event identities.
+  dead-letter topology are unchanged. Event-level idempotency remains applicable when
+  a batch is delivered or replayed again with its original event identities.
 
 ## Explicit limitations
 

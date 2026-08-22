@@ -1,4 +1,3 @@
-using System.Threading.Channels;
 using RabbitMQ.Client;
 using RabbitMQ.Client.Events;
 
@@ -8,9 +7,8 @@ internal sealed class RabbitMqIngestionBatchConsumer : IIngestionBatchConsumer
 {
     private readonly IChannel _channel;
     private readonly string _queueName;
-    // RabbitMQ calls us back, while the application reads one delivery at a time.
-    private readonly Channel<IngestionBatchDelivery> _deliveries =
-        System.Threading.Channels.Channel.CreateUnbounded<IngestionBatchDelivery>();
+    private readonly TaskCompletionSource _callbackFailure = new(
+        TaskCreationOptions.RunContinuationsAsynchronously);
     private string? _consumerTag;
     private bool _isDisposed;
 
@@ -20,17 +18,14 @@ internal sealed class RabbitMqIngestionBatchConsumer : IIngestionBatchConsumer
         _queueName = queueName;
     }
 
-    internal IChannel Channel => _channel;
-
-    public async IAsyncEnumerable<IngestionBatchDelivery> ReadAllAsync(
-        [System.Runtime.CompilerServices.EnumeratorCancellation] CancellationToken cancellationToken)
+    public async Task ConsumeAsync(
+        IngestionBatchHandler handler,
+        CancellationToken cancellationToken)
     {
-        await StartAsync(cancellationToken);
+        ArgumentNullException.ThrowIfNull(handler);
 
-        await foreach (var delivery in _deliveries.Reader.ReadAllAsync(cancellationToken))
-        {
-            yield return delivery;
-        }
+        await StartAsync(handler, cancellationToken);
+        await _callbackFailure.Task.WaitAsync(cancellationToken);
     }
 
     public async ValueTask DisposeAsync()
@@ -41,8 +36,6 @@ internal sealed class RabbitMqIngestionBatchConsumer : IIngestionBatchConsumer
         }
 
         _isDisposed = true;
-        // Stop new deliveries before closing the broker channel.
-        _deliveries.Writer.TryComplete();
 
         try
         {
@@ -61,7 +54,9 @@ internal sealed class RabbitMqIngestionBatchConsumer : IIngestionBatchConsumer
         }
     }
 
-    private async Task StartAsync(CancellationToken cancellationToken)
+    private async Task StartAsync(
+        IngestionBatchHandler handler,
+        CancellationToken cancellationToken)
     {
         if (_consumerTag is not null)
         {
@@ -71,29 +66,57 @@ internal sealed class RabbitMqIngestionBatchConsumer : IIngestionBatchConsumer
         ObjectDisposedException.ThrowIf(_isDisposed, this);
 
         var consumer = new AsyncEventingBasicConsumer(_channel);
-        consumer.ReceivedAsync += (_, eventArgs) =>
-        {
-            // RabbitMQ owns this buffer after the callback ends, so copy it now.
-            var delivery = new IngestionBatchDelivery(
-                eventArgs.Body.ToArray(),
-                acknowledgementCancellationToken => _channel.BasicAckAsync(
-                    eventArgs.DeliveryTag,
-                    multiple: false,
-                    acknowledgementCancellationToken).AsTask(),
-                rejectionCancellationToken => _channel.BasicRejectAsync(
-                    eventArgs.DeliveryTag,
-                    requeue: false,
-                    rejectionCancellationToken).AsTask());
-
-            // The app decides when to acknowledge after it processes this delivery.
-            _deliveries.Writer.TryWrite(delivery);
-            return Task.CompletedTask;
-        };
+        consumer.ReceivedAsync += OnReceivedAsync;
 
         _consumerTag = await _channel.BasicConsumeAsync(
             queue: _queueName,
             autoAck: false,
             consumer: consumer,
             cancellationToken: cancellationToken);
+
+        async Task OnReceivedAsync(object _, BasicDeliverEventArgs eventArgs)
+        {
+            // RabbitMQ owns this buffer after the callback ends, so copy it now.
+            var delivery = CreateDelivery(eventArgs);
+
+            try
+            {
+                // The application owns processing and settlement, not RabbitMQ primitives.
+                await handler(delivery, cancellationToken);
+            }
+            catch (OperationCanceledException)
+                when (cancellationToken.IsCancellationRequested)
+            {
+            }
+            catch (Exception exception)
+            {
+                _callbackFailure.TrySetException(exception);
+                throw;
+            }
+        }
+    }
+
+    private IngestionBatchDelivery CreateDelivery(BasicDeliverEventArgs eventArgs)
+    {
+        Task AcknowledgeAsync(CancellationToken cancellationToken)
+        {
+            return _channel.BasicAckAsync(
+                eventArgs.DeliveryTag,
+                multiple: false,
+                cancellationToken).AsTask();
+        }
+
+        Task RejectAsync(CancellationToken cancellationToken)
+        {
+            return _channel.BasicRejectAsync(
+                eventArgs.DeliveryTag,
+                requeue: false,
+                cancellationToken).AsTask();
+        }
+
+        return new IngestionBatchDelivery(
+            eventArgs.Body.ToArray(),
+            AcknowledgeAsync,
+            RejectAsync);
     }
 }

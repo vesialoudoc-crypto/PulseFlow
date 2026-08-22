@@ -1,6 +1,5 @@
 using System.Text;
 using System.Text.Json;
-using System.Threading.Channels;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
@@ -122,21 +121,22 @@ public sealed class EventParserConsumerIntegrationTests : IClassFixture<PostgreS
 
     private sealed class TestIngestionBatchConsumer : IIngestionBatchConsumer
     {
-        private readonly Channel<IngestionBatchDelivery> _deliveries =
-            Channel.CreateUnbounded<IngestionBatchDelivery>();
+        private IngestionBatchHandler? _handler;
 
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
-        public IAsyncEnumerable<IngestionBatchDelivery> ReadAllAsync(
+        public async Task ConsumeAsync(
+            IngestionBatchHandler handler,
             CancellationToken cancellationToken)
         {
+            _handler = handler;
             Started.SetResult();
-            return _deliveries.Reader.ReadAllAsync(cancellationToken);
+
+            await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
         }
 
         public ValueTask DisposeAsync()
         {
-            _deliveries.Writer.TryComplete();
             return ValueTask.CompletedTask;
         }
 
@@ -147,7 +147,10 @@ public sealed class EventParserConsumerIntegrationTests : IClassFixture<PostgreS
                 acknowledgementCancellationToken => Task.CompletedTask,
                 rejectionCancellationToken => Task.CompletedTask);
 
-            return _deliveries.Writer.WriteAsync(delivery, cancellationToken);
+            var handler = _handler
+                ?? throw new InvalidOperationException("The consumer has not started.");
+
+            return new ValueTask(handler(delivery, cancellationToken));
         }
     }
 

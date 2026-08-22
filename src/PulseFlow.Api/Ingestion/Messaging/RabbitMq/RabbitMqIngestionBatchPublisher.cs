@@ -11,6 +11,8 @@ internal sealed class RabbitMqIngestionBatchPublisher : IIngestionBatchPublisher
     private IChannel? _channel;
     private bool _isDisposed;
 
+    internal IChannel? Channel => _channel;
+
     public RabbitMqIngestionBatchPublisher(
         RabbitMqConnectionManager connectionManager,
         RabbitMqOptions options)
@@ -19,9 +21,7 @@ internal sealed class RabbitMqIngestionBatchPublisher : IIngestionBatchPublisher
         _options = options;
     }
 
-    internal IChannel? Channel => _channel;
-
-    public async Task InitializeAsync(CancellationToken cancellationToken)
+    public async Task InitializeAsync(CancellationToken ct)
     {
         if (_channel is not null)
         {
@@ -29,7 +29,7 @@ internal sealed class RabbitMqIngestionBatchPublisher : IIngestionBatchPublisher
         }
 
         // Startup and the first HTTP request can race, but they use one channel.
-        await _initializationGate.WaitAsync(cancellationToken);
+        await _initializationGate.WaitAsync(ct);
 
         try
         {
@@ -43,7 +43,7 @@ internal sealed class RabbitMqIngestionBatchPublisher : IIngestionBatchPublisher
 
                 _channel = await _connectionManager.CreateChannelAsync(
                     channelOptions,
-                    cancellationToken);
+                    ct);
             }
         }
         finally
@@ -54,19 +54,24 @@ internal sealed class RabbitMqIngestionBatchPublisher : IIngestionBatchPublisher
 
     public async Task PublishAsync(
         ReadOnlyMemory<byte> rawBatch,
-        CancellationToken cancellationToken)
+        CancellationToken ct)
     {
-        await InitializeAsync(cancellationToken);
+        await InitializeAsync(ct);
         // Many requests share this channel, so publish one batch at a time.
-        await _publishGate.WaitAsync(cancellationToken);
+        await _publishGate.WaitAsync(ct);
 
         try
         {
-            await (_channel ?? throw new InvalidOperationException(
-                "RabbitMQ publisher channel is not initialized."))
-                .BasicPublishAsync(
+            if(_channel is null)
+            {
+                throw new InvalidOperationException(
+                "RabbitMQ publisher channel is not initialized.");
+            }
+
+            await _channel.BasicPublishAsync(
                     exchange: string.Empty,
                     routingKey: _options.QueueName,
+                    // Do not silently lose the batch if the target queue does not exist.
                     mandatory: true,
                     basicProperties: new BasicProperties
                     {
@@ -74,7 +79,7 @@ internal sealed class RabbitMqIngestionBatchPublisher : IIngestionBatchPublisher
                         DeliveryMode = DeliveryModes.Persistent
                     },
                     body: rawBatch,
-                    cancellationToken: cancellationToken);
+                    cancellationToken: ct);
         }
         finally
         {

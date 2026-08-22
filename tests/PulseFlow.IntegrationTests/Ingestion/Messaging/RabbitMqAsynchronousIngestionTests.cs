@@ -3,10 +3,8 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using PulseFlow.Api.Ingestion.Messaging;
-using PulseFlow.Api.Ingestion.Messaging.RabbitMq;
 using PulseFlow.Api.Ingestion.Persistence;
 using PulseFlow.Api.Persistence;
 using PulseFlow.Api.Persistence.Events;
@@ -56,28 +54,18 @@ public sealed class RabbitMqAsynchronousIngestionTests :
     }
 
     [Fact]
-    public async Task ConsumerCount_Two_StartsWorkersWithSeparateConsumerChannels()
+    public async Task ConsumerCount_Two_RegistersTwoRabbitMqConsumers()
     {
         // Arrange
         var queueName = CreateQueueName();
         using var factory = CreateFactory(consumerCount: 2, queueName);
+        using var client = factory.CreateClient();
 
-        // This checks channel ownership, not which consumer gets a delivery.
         // Act
-        var consumer = Assert.Single(factory.Services
-            .GetServices<IHostedService>()
-            .OfType<EventParserConsumer>()
-            .ToArray());
-        var consumerFactory = Assert.IsType<RabbitMqIngestionBatchConsumerFactory>(
-            consumer.ConsumerFactory);
-        var consumerChannels = await WaitForConsumerChannelsAsync(consumerFactory);
-        var connectionManager = factory.Services.GetRequiredService<RabbitMqConnectionManager>();
+        var queueInfo = await WaitForConsumerCountAsync(queueName, expectedCount: 2);
 
         // Assert
-        Assert.Equal(2, consumer.ConsumerCount);
-        Assert.Equal(2, consumerChannels.Length);
-        Assert.NotNull(connectionManager.Connection);
-        Assert.NotSame(consumerChannels[0].Channel, consumerChannels[1].Channel);
+        Assert.Equal(2U, queueInfo.ConsumerCount);
     }
 
     [Fact]
@@ -184,24 +172,26 @@ public sealed class RabbitMqAsynchronousIngestionTests :
         throw new TimeoutException("The expected events were not persisted before the timeout.");
     }
 
-    private static async Task<RabbitMqIngestionBatchConsumer[]> WaitForConsumerChannelsAsync(
-        RabbitMqIngestionBatchConsumerFactory consumerFactory)
+    private async Task<QueueDeclareOk> WaitForConsumerCountAsync(
+        string queueName,
+        uint expectedCount)
     {
         using var timeoutSource = new CancellationTokenSource(TimeSpan.FromSeconds(5));
 
         while (!timeoutSource.IsCancellationRequested)
         {
-            var consumers = consumerFactory.Consumers.ToArray();
+            var queueInfo = await GetQueueInfoAsync(queueName);
 
-            if (consumers.Length == 2)
+            if (queueInfo.ConsumerCount == expectedCount)
             {
-                return consumers;
+                return queueInfo;
             }
 
-            await Task.Delay(TimeSpan.FromMilliseconds(50), timeoutSource.Token);
+            await Task.Delay(TimeSpan.FromMilliseconds(50));
         }
 
-        throw new TimeoutException("The configured parser consumers did not start before the timeout.");
+        throw new TimeoutException(
+            $"Queue '{queueName}' did not reach {expectedCount} consumers before the timeout.");
     }
 
     private PulseFlowDbContext CreateDbContext()

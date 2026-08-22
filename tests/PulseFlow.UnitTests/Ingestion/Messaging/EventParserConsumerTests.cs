@@ -1,10 +1,8 @@
 using System.Text;
 using System.Text.Json;
-using System.Threading.Channels;
 using System.Reflection;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
-using Npgsql;
 using PulseFlow.Api.Ingestion;
 using PulseFlow.Api.Ingestion.Contracts;
 using PulseFlow.Api.Ingestion.Messaging;
@@ -74,42 +72,7 @@ public sealed class EventParserConsumerTests
     }
 
     [Fact]
-    public async Task EventParserConsumer_TransientPersistenceFailureThenSuccess_RetriesOnceAndAcknowledgesDelivery()
-    {
-        // Arrange
-        var store = new RecordingEventChunkStore(
-            CreateTransientNpgsqlException("Transient persistence failure."));
-        await using var testContext = CreateTestContext(store);
-
-        // Act
-        await testContext.DeliverAsync(Encoding.UTF8.GetBytes(CreateRecordJson("valid") + "\n"));
-
-        // Assert
-        Assert.Equal(2, store.AttemptCount);
-        Assert.Equal(1, testContext.Consumer.AcknowledgementCount);
-        Assert.Equal(0, testContext.Consumer.RejectionCount);
-    }
-
-    [Fact]
-    public async Task EventParserConsumer_TransientPersistenceFailureTwice_RetriesOnceThenRejectsDelivery()
-    {
-        // Arrange
-        var store = new RecordingEventChunkStore(
-            CreateTransientNpgsqlException("First transient persistence failure."),
-            CreateTransientNpgsqlException("Second transient persistence failure."));
-        await using var testContext = CreateTestContext(store);
-
-        // Act
-        await testContext.DeliverAsync(Encoding.UTF8.GetBytes(CreateRecordJson("valid") + "\n"));
-
-        // Assert
-        Assert.Equal(2, store.AttemptCount);
-        Assert.Equal(0, testContext.Consumer.AcknowledgementCount);
-        Assert.Equal(1, testContext.Consumer.RejectionCount);
-    }
-
-    [Fact]
-    public async Task EventParserConsumer_NonTransientPersistenceFailure_RejectsDeliveryWithoutRetrying()
+    public async Task EventParserConsumer_ProcessingFailure_RejectsDelivery()
     {
         // Arrange
         var store = new RecordingEventChunkStore(new InvalidOperationException("Persistence failed."));
@@ -119,7 +82,7 @@ public sealed class EventParserConsumerTests
         await testContext.DeliverAsync(Encoding.UTF8.GetBytes(CreateRecordJson("valid") + "\n"));
 
         // Assert
-        Assert.Equal(1, store.AttemptCount);
+        Assert.Equal(1, store.StoreAsyncAttemptCount);
         Assert.Equal(0, testContext.Consumer.AcknowledgementCount);
         Assert.Equal(1, testContext.Consumer.RejectionCount);
     }
@@ -175,100 +138,13 @@ public sealed class EventParserConsumerTests
         await testContext.StopAsync();
 
         // Assert
-        Assert.Equal(1, store.AttemptCount);
+        Assert.Equal(1, store.StoreAsyncAttemptCount);
         Assert.Equal(0, testContext.Consumer.AcknowledgementCount);
         Assert.Equal(0, testContext.Consumer.RejectionCount);
     }
 
     [Fact]
-    public async Task EventParserConsumer_TwoWorkersAcknowledgementFails_StopsSiblingAndPropagatesOriginalException()
-    {
-        // Arrange
-        var store = new RecordingEventChunkStore();
-        var failedWorker = new TestIngestionBatchConsumer
-        {
-            AcknowledgementException = new InvalidOperationException("Acknowledgement failed."),
-            DisposalException = new InvalidOperationException("Consumer disposal failed.")
-        };
-        var siblingWorker = new TestIngestionBatchConsumer();
-        await using var testContext = CreateWorkerTestContext(
-            store,
-            new TestIngestionBatchConsumerFactory(failedWorker, siblingWorker),
-            consumerCount: 2);
-
-        await testContext.StartAsync();
-        await Task.WhenAll(failedWorker.Started.Task, siblingWorker.Started.Task)
-            .WaitAsync(TimeSpan.FromSeconds(5));
-
-        // Act
-        await failedWorker.SendAsync(
-            Encoding.UTF8.GetBytes(CreateRecordJson("valid") + "\n"),
-            CancellationToken.None);
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => testContext.ExecutionTask.WaitAsync(TimeSpan.FromSeconds(5)));
-
-        // Assert
-        Assert.Same(failedWorker.AcknowledgementException, exception);
-        Assert.Equal(0, failedWorker.RejectionCount);
-        await siblingWorker.Disposed.Task.WaitAsync(TimeSpan.FromSeconds(5));
-    }
-
-    [Fact]
-    public async Task EventParserConsumer_TwoWorkersRejectionFails_StopsSiblingAndPropagatesOriginalException()
-    {
-        // Arrange
-        var store = new RecordingEventChunkStore(new InvalidOperationException("Persistence failed."));
-        var failedWorker = new TestIngestionBatchConsumer
-        {
-            RejectionException = new InvalidOperationException("Rejection failed.")
-        };
-        var siblingWorker = new TestIngestionBatchConsumer();
-        await using var testContext = CreateWorkerTestContext(
-            store,
-            new TestIngestionBatchConsumerFactory(failedWorker, siblingWorker),
-            consumerCount: 2);
-
-        await testContext.StartAsync();
-        await Task.WhenAll(failedWorker.Started.Task, siblingWorker.Started.Task)
-            .WaitAsync(TimeSpan.FromSeconds(5));
-
-        // Act
-        await failedWorker.SendAsync(
-            Encoding.UTF8.GetBytes(CreateRecordJson("valid") + "\n"),
-            CancellationToken.None);
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => testContext.ExecutionTask.WaitAsync(TimeSpan.FromSeconds(5)));
-
-        // Assert
-        Assert.Same(failedWorker.RejectionException, exception);
-        Assert.Equal(0, failedWorker.AcknowledgementCount);
-        await siblingWorker.Disposed.Task.WaitAsync(TimeSpan.FromSeconds(5));
-    }
-
-    [Fact]
-    public async Task EventParserConsumer_WorkerCreationFails_StopsHealthySiblingAndPropagatesOriginalException()
-    {
-        // Arrange
-        var store = new RecordingEventChunkStore();
-        var siblingWorker = new TestIngestionBatchConsumer();
-        var factory = new DelayedFailingIngestionBatchConsumerFactory(siblingWorker);
-        await using var testContext = CreateWorkerTestContext(store, factory, consumerCount: 2);
-
-        await testContext.StartAsync();
-        await siblingWorker.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
-
-        // Act
-        factory.FailCreation();
-        var exception = await Assert.ThrowsAsync<InvalidOperationException>(
-            () => testContext.ExecutionTask.WaitAsync(TimeSpan.FromSeconds(5)));
-
-        // Assert
-        Assert.Same(factory.CreationException, exception);
-        await siblingWorker.Disposed.Task.WaitAsync(TimeSpan.FromSeconds(5));
-    }
-
-    [Fact]
-    public async Task EventParserConsumer_TwoWorkersHostStops_StopsCleanly()
+    public async Task EventParserConsumer_TwoWorkersHostStops_CancelsWorkers()
     {
         // Arrange
         var store = new RecordingEventChunkStore();
@@ -287,7 +163,7 @@ public sealed class EventParserConsumerTests
         await testContext.StopAsync();
 
         // Assert
-        Assert.True(testContext.ExecutionTask.IsCompletedSuccessfully);
+        Assert.True(testContext.ExecutionTask.IsCanceled);
         await Task.WhenAll(firstWorker.Disposed.Task, secondWorker.Disposed.Task)
             .WaitAsync(TimeSpan.FromSeconds(5));
     }
@@ -298,8 +174,10 @@ public sealed class EventParserConsumerTests
         // Arrange
         var channel = DispatchProxy.Create<IChannel, CancelFailingChannel>();
         var consumer = new RabbitMqIngestionBatchConsumer(channel, "test-queue");
-        await using var enumerator = consumer.ReadAllAsync(CancellationToken.None).GetAsyncEnumerator();
-        var moveNextTask = enumerator.MoveNextAsync().AsTask();
+        using var stoppingSource = new CancellationTokenSource();
+        var consumptionTask = consumer.ConsumeAsync(
+            static (_, _) => Task.CompletedTask,
+            stoppingSource.Token);
         await ((CancelFailingChannel)(object)channel).ConsumeStarted.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         // Act
@@ -309,7 +187,8 @@ public sealed class EventParserConsumerTests
         // Assert
         Assert.Equal("Consumer cancellation failed.", exception.Message);
         Assert.True(((CancelFailingChannel)(object)channel).Disposed);
-        Assert.False(await moveNextTask.WaitAsync(TimeSpan.FromSeconds(5)));
+        stoppingSource.Cancel();
+        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => consumptionTask);
     }
 
     #region Test helpers
@@ -351,11 +230,6 @@ public sealed class EventParserConsumerTests
             occurredAt = "2026-08-17T10:00:00Z",
             payload = payload ?? new { sequence = type }
         });
-    }
-
-    private static NpgsqlException CreateTransientNpgsqlException(string message)
-    {
-        return new NpgsqlException(message, new TimeoutException());
     }
 
     private sealed class ConsumerTestContext : IAsyncDisposable
@@ -431,8 +305,9 @@ public sealed class EventParserConsumerTests
 
     private sealed class TestIngestionBatchConsumer : IIngestionBatchConsumer
     {
-        private readonly Channel<IngestionBatchDelivery> _deliveries =
-            Channel.CreateUnbounded<IngestionBatchDelivery>();
+        private readonly TaskCompletionSource _consumptionFailure = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+        private IngestionBatchHandler? _handler;
 
         public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
@@ -446,22 +321,22 @@ public sealed class EventParserConsumerTests
 
         public Exception? RejectionException { get; set; }
 
-        public Exception? DisposalException { get; set; }
-
-        public IAsyncEnumerable<IngestionBatchDelivery> ReadAllAsync(
+        public async Task ConsumeAsync(
+            IngestionBatchHandler handler,
             CancellationToken cancellationToken)
         {
+            _handler = handler;
             Started.SetResult();
-            return _deliveries.Reader.ReadAllAsync(cancellationToken);
+
+            var cancellationTask = Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            var completedTask = await Task.WhenAny(_consumptionFailure.Task, cancellationTask);
+            await completedTask;
         }
 
         public ValueTask DisposeAsync()
         {
-            _deliveries.Writer.TryComplete();
             Disposed.TrySetResult();
-            return DisposalException is null
-                ? ValueTask.CompletedTask
-                : ValueTask.FromException(DisposalException);
+            return ValueTask.CompletedTask;
         }
 
         public async Task DeliverAsync(ReadOnlyMemory<byte> body, CancellationToken cancellationToken)
@@ -487,7 +362,7 @@ public sealed class EventParserConsumerTests
                         : Task.FromException(RejectionException);
                 });
 
-            await _deliveries.Writer.WriteAsync(delivery, cancellationToken);
+            await DispatchAsync(delivery, cancellationToken);
             await completed.Task.WaitAsync(TimeSpan.FromSeconds(5), cancellationToken);
         }
 
@@ -510,38 +385,25 @@ public sealed class EventParserConsumerTests
                         : Task.FromException(RejectionException);
                 });
 
-            return _deliveries.Writer.WriteAsync(delivery, cancellationToken);
-        }
-    }
-
-    private sealed class DelayedFailingIngestionBatchConsumerFactory : IIngestionBatchConsumerFactory
-    {
-        private readonly TestIngestionBatchConsumer _healthyConsumer;
-        private readonly TaskCompletionSource _creationFailure = new(
-            TaskCreationOptions.RunContinuationsAsynchronously);
-        private int _nextConsumer;
-
-        public DelayedFailingIngestionBatchConsumerFactory(TestIngestionBatchConsumer healthyConsumer)
-        {
-            _healthyConsumer = healthyConsumer;
+            _ = DispatchAsync(delivery, cancellationToken);
+            return ValueTask.CompletedTask;
         }
 
-        public InvalidOperationException CreationException { get; } = new("Consumer creation failed.");
-
-        public async ValueTask<IIngestionBatchConsumer> CreateAsync(CancellationToken cancellationToken)
+        private async Task DispatchAsync(
+            IngestionBatchDelivery delivery,
+            CancellationToken cancellationToken)
         {
-            if (Interlocked.Increment(ref _nextConsumer) == 1)
+            var handler = _handler
+                ?? throw new InvalidOperationException("The consumer has not started.");
+
+            try
             {
-                await _creationFailure.Task.WaitAsync(cancellationToken);
-                throw CreationException;
+                await handler(delivery, cancellationToken);
             }
-
-            return _healthyConsumer;
-        }
-
-        public void FailCreation()
-        {
-            _creationFailure.TrySetResult();
+            catch (Exception exception)
+            {
+                _consumptionFailure.TrySetException(exception);
+            }
         }
     }
 
@@ -636,7 +498,7 @@ public sealed class EventParserConsumerTests
             _waitForCancellation = waitForCancellation;
         }
 
-        public int AttemptCount { get; private set; }
+        public int StoreAsyncAttemptCount { get; private set; }
 
         public List<IReadOnlyList<EventEnvelope>> SuccessfulChunks { get; } = [];
 
@@ -647,7 +509,7 @@ public sealed class EventParserConsumerTests
             IReadOnlyCollection<EventEnvelope> events,
             CancellationToken cancellationToken = default)
         {
-            AttemptCount++;
+            StoreAsyncAttemptCount++;
             StoreAttempted.TrySetResult();
 
             if (_waitForCancellation)

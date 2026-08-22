@@ -124,15 +124,15 @@ raw NDJSON body and returns HTTP 202 only after RabbitMQ confirms publication.
 It owns one application connection, one publisher-confirmation channel, and one
 consumer channel for each worker. One hosted `EventParserConsumer` starts the validated
 number of competing workers, reuses the Stage 1 parsing/validation/chunked-persistence
-path, and acknowledges a delivery only after that handler succeeds. A real RabbitMQ
-and PostgreSQL Testcontainers test verifies the complete path and the separate consumer
-channels. `RabbitMq:ConsumerCount` defaults to 1 and is validated as positive; it
+path, and acknowledges a delivery only after that handler succeeds. Real RabbitMQ and
+PostgreSQL Testcontainers tests verify the complete path and, through RabbitMQ queue
+metadata, that `ConsumerCount = 2` registers two consumers on the configured queue.
+`RabbitMq:ConsumerCount` defaults to 1 and is validated as positive; it
 controls parser-consumer capacity, not HTTP API instance count. Retry, dead-letter,
 requeue, Outbox, idempotency, delivery guarantees, and batch status remain intentionally
-unresolved. The adapter copies deliveries into an unbounded application channel, and
-RabbitMQ.Client 7.2.2 has an internal unbounded consumer-dispatch work channel, so the
-current Stage 2 buffering is not a production throughput or memory guarantee.
-Broker-side flow control through RabbitMQ prefetch is intentionally deferred.
+unresolved. The adapter copies each delivery body and invokes the application handler
+directly; it has no application-level queue or buffer. Broker-side flow control through
+RabbitMQ prefetch is intentionally deferred.
 
 ### Do Not Decide in Advance
 
@@ -177,24 +177,23 @@ Automated or reproducible checks exist for a documented set of failures and repe
 The first reliability slice is implemented. For an unexpected parsing or PostgreSQL
 persistence failure, `EventParserConsumer` logs the failure, rejects only that RabbitMQ
 delivery with `requeue = false`, and routes it to a durable dedicated dead-letter queue.
-One transient `NpgsqlException` processing failure receives one in-process retry of the
-complete raw batch after a short fixed delay; an exhausted retry uses the same terminal
-rejection path. Successful processing still acknowledges only after the handler
-completes; shutdown cancellation does not reject a delivery. Malformed NDJSON and
-contract-invalid records remain record-level outcomes inside the established pipeline
-and do not dead-letter the whole batch.
+Each delivery receives exactly one complete processing attempt. Successful processing
+still acknowledges only after the handler completes; shutdown cancellation does not
+reject a delivery. Malformed NDJSON and contract-invalid records remain record-level
+outcomes inside the established pipeline and do not dead-letter the whole batch.
 
 The main queue uses application-owned dead-letter queue arguments. An existing local
 queue that was declared before this change must be recreated manually because RabbitMQ
 does not permit those queue arguments to change. Application startup never deletes,
 purges, or silently recreates a queue. The implementation and its limitations are
-recorded in [ADR 0010](decisions/0010-dead-letter-unexpected-batch-processing-failures.md).
+recorded in [ADR 0012](decisions/0012-process-each-rabbitmq-delivery-once.md).
 
-The hosted parser consumer supervises all configured workers as one unit. An unexpected
-worker, RabbitMQ, settlement, or consumer-infrastructure failure cancels the sibling
-workers, waits for their cleanup, and fails the hosted service with the initiating
-exception. A worker that finishes while the host is still running is also treated as a
-failure. There is no automatic worker restart.
+The hosted parser consumer starts exactly the configured number of workers and passes
+the host stopping token to each one. It waits for all worker tasks with
+`Task.WhenAll`; it does not coordinate worker failures, cancel siblings, restart
+workers, or treat a normally completed worker as a special failure. A worker exception
+naturally faults the `BackgroundService` after `Task.WhenAll` completes. This lifecycle
+is recorded in [ADR 0013](decisions/0013-use-backgroundservice-worker-lifecycle.md).
 
 The next reliability slice is implemented through Event Contract v2. Every valid event
 has a source-owned UUID `eventId`; the logical identity is `(source, eventId)`. The
