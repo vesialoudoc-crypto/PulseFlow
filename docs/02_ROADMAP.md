@@ -149,14 +149,17 @@ RabbitMQ prefetch is intentionally deferred.
 
 ## Stage 3: Reliability and Correctness During Failures
 
-**Status:** In progress
+**Status:** Completed
 
 ### Goals
 
 - Define and implement behavior for repeated requests and repeated delivery.
 - Decide what happens to a delivery when parsing or persistence fails before choosing
   RabbitMQ prefetch or other broker-side flow control.
-- Introduce bounded retries and handling for unrecoverable messages.
+- Define retry and recovery behavior, distinguishing recoverable and unrecoverable
+  processing outcomes.
+- Explicitly choose no automatic processing retry: a terminal processing failure is
+  rejected without requeueing to the DLQ for later manual recovery.
 - Test partial failures between the main components.
 - Prevent silent data loss in the selected scenarios.
 
@@ -208,7 +211,8 @@ sources with one UUID, partial chunk replay, and concurrent inserts. See
 
 This is not an end-to-end no-loss, at-least-once, or exactly-once guarantee. RabbitMQ
 dead-letter republishing can fail, and earlier PostgreSQL chunks can already be durable
-when a later chunk fails. Retry queues, redrive, Outbox, and prefetch remain unresolved.
+when a later chunk fails. No automatic retry or DLQ redrive exists; later recovery is
+manual and separately defined. Retry queues, Outbox, and prefetch remain unresolved.
 
 ## Stage 4: Horizontal Scaling and Load
 
