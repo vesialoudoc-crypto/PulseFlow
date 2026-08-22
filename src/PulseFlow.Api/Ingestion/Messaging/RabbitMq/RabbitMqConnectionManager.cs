@@ -39,8 +39,7 @@ internal sealed class RabbitMqConnectionManager : IAsyncDisposable
             _connection = await _connectionFactory.CreateConnectionAsync(ct);
 
             // This short-lived channel is used only to declare RabbitMQ topology at startup.
-            await using var topologyChannel = await _connection.CreateChannelAsync(
-                cancellationToken: ct);
+            await using var topologyChannel = await _connection.CreateChannelAsync(cancellationToken: ct);
 
             await DeclareDeadLetterTopologyAsync(topologyChannel, ct);
             await DeclareMainQueueAsync(topologyChannel, ct);
@@ -105,11 +104,19 @@ internal sealed class RabbitMqConnectionManager : IAsyncDisposable
     }
 
     private async Task DeclareDeadLetterTopologyAsync(
-        IChannel topologyChannel,
+        IChannel channel,
         CancellationToken ct)
     {
-        // Rejected batches are routed through this exchange into the dead-letter queue.
-        await topologyChannel.ExchangeDeclareAsync(
+        await DeclareDeadLetterExchangeAsync(channel, ct);
+        await DeclareDeadLetterQueueAsync(channel, ct);
+        await BindDeadLetterQueueAsync(channel, ct);
+    }
+
+    private Task DeclareDeadLetterExchangeAsync(
+        IChannel channel,
+        CancellationToken ct)
+    {
+        return channel.ExchangeDeclareAsync(
             exchange: _options.DeadLetterExchangeName,
             type: ExchangeType.Direct,
             durable: true,
@@ -118,14 +125,26 @@ internal sealed class RabbitMqConnectionManager : IAsyncDisposable
             passive: false,
             noWait: false,
             cancellationToken: ct);
-        await topologyChannel.QueueDeclareAsync(
+    }
+
+    private Task DeclareDeadLetterQueueAsync(
+        IChannel channel,
+        CancellationToken ct)
+    {
+        return channel.QueueDeclareAsync(
             queue: _options.DeadLetterQueueName,
             durable: true,
             exclusive: false,
             autoDelete: false,
             arguments: null,
             cancellationToken: ct);
-        await topologyChannel.QueueBindAsync(
+    }
+
+    private Task BindDeadLetterQueueAsync(
+        IChannel channel,
+        CancellationToken ct)
+    {
+        return channel.QueueBindAsync(
             queue: _options.DeadLetterQueueName,
             exchange: _options.DeadLetterExchangeName,
             routingKey: _options.DeadLetterRoutingKey,
