@@ -89,19 +89,27 @@ Every checkpoint must contain:
 Existing checkpoints are historical records and must not be rewritten, except to
 correct factual errors. Create a new checkpoint for later developments.
 
+## Continuous integration
+
+- GitHub Actions CI already exists in `.github/workflows/ci.yml`.
+- Do not create, replace, redesign, or expand CI unless a task explicitly requires it.
+- CI is additional verification after changes are pushed.
+- CI does not replace local verification before considering implementation complete.
+- Do not commit or push automatically unless explicitly requested.
+
 ## Verification
 
 Before considering implementation work complete:
 
-1. Build the solution.
-2. Run relevant automated tests.
-3. Check that the newest checkpoint and roadmap describe the resulting state.
-4. Report unresolved issues or assumptions explicitly.
+1. Run the standard repository checks below.
+2. Check that the newest checkpoint and roadmap describe the resulting state.
+3. Report unresolved issues or assumptions explicitly.
 
 Run the project checks from the repository root:
 
 ```powershell
-dotnet build PulseFlow.slnx
+dotnet csharpier check .
+dotnet build PulseFlow.slnx -warnaserror
 dotnet test PulseFlow.slnx
 pwsh ./scripts/check-project-docs.ps1
 ```
