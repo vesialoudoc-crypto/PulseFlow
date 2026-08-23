@@ -1,5 +1,11 @@
+using System.Net;
+using System.Text;
+using Microsoft.AspNetCore.Mvc.Testing;
+using Microsoft.Extensions.DependencyInjection;
+using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
+using PulseFlow.Api.Ingestion.Messaging;
 using PulseFlow.Api.Ingestion.RateLimiting;
 using PulseFlow.IntegrationTests.Infrastructure;
 using StackExchange.Redis;
@@ -87,7 +93,61 @@ public sealed class RedisIngestionRateLimiterTests : IClassFixture<RedisFixture>
         Assert.Equal(IngestionRateLimitStatus.Unavailable, result.Status);
     }
 
+    [Fact]
+    public async Task PostEvents_TwoApiHostsShareRedisQuota_RejectsFifthRequest()
+    {
+        // Arrange
+        var publisher = new RecordingIngestionBatchPublisher();
+        using var apiAFactory = CreateApiFactory(publisher);
+        using var apiBFactory = CreateApiFactory(publisher);
+        using var apiAClient = apiAFactory.CreateClient();
+        using var apiBClient = apiBFactory.CreateClient();
+
+        // Act
+        using var firstResponse = await PostEventsAsync(apiAClient);
+        using var secondResponse = await PostEventsAsync(apiBClient);
+        using var thirdResponse = await PostEventsAsync(apiAClient);
+        using var fourthResponse = await PostEventsAsync(apiBClient);
+        using var fifthResponse = await PostEventsAsync(apiAClient);
+
+        // Assert
+        Assert.All(
+            new[] { firstResponse, secondResponse, thirdResponse, fourthResponse },
+            response => Assert.Equal(HttpStatusCode.Accepted, response.StatusCode));
+        Assert.Equal(HttpStatusCode.TooManyRequests, fifthResponse.StatusCode);
+        Assert.NotNull(fifthResponse.Headers.RetryAfter);
+        Assert.Equal(4, publisher.PublishCallCount);
+    }
+
     #region Test helpers
+
+    private WebApplicationFactory<Program> CreateApiFactory(
+        IIngestionBatchPublisher publisher)
+    {
+        var factory = new PulseFlowWebApplicationFactory<Program>(
+            "Host=localhost;Database=pulseflow_tests;Username=postgres;Password=postgres",
+            _fixture.ConnectionString,
+            requestLimit: 4,
+            windowDuration: TimeSpan.FromMinutes(1));
+
+        return factory.WithWebHostBuilder(builder =>
+        {
+            builder.ConfigureServices(services =>
+            {
+                services.RemoveAll<IIngestionBatchPublisher>();
+                services.AddSingleton(publisher);
+            });
+        });
+    }
+
+    private static async Task<HttpResponseMessage> PostEventsAsync(HttpClient client)
+    {
+        using var content = new ByteArrayContent(Encoding.UTF8.GetBytes("{\"type\":\"event\"}\n"));
+        content.Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue(
+            "application/x-ndjson");
+
+        return await client.PostAsync("/api/events", content);
+    }
 
     private RedisIngestionRateLimiter CreateLimiter(int requestLimit, TimeSpan windowDuration)
     {
@@ -120,6 +180,20 @@ public sealed class RedisIngestionRateLimiterTests : IClassFixture<RedisFixture>
     {
         return _connectionMultiplexer
             ?? throw new InvalidOperationException("The Redis test connection has not been initialized.");
+    }
+
+    private sealed class RecordingIngestionBatchPublisher : IIngestionBatchPublisher
+    {
+        public int PublishCallCount { get; private set; }
+
+        public Task PublishAsync(
+            ReadOnlyMemory<byte> rawBatch,
+            CancellationToken cancellationToken)
+        {
+            PublishCallCount++;
+
+            return Task.CompletedTask;
+        }
     }
 
     #endregion
