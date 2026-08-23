@@ -257,12 +257,16 @@ unavailable result for a Redis operation failure. The accepted global scope and
 fail-closed behavior are recorded in
 [ADR 0014](decisions/0014-use-redis-for-global-ingestion-rate-limiting.md).
 
-Controller integration, request-body ordering, HTTP 429/503 response, and RabbitMQ
-publish prevention are not implemented yet.
+`EventsController` checks the limiter before it reads the request body or calls the
+RabbitMQ publisher. An exceeded result returns HTTP 429 with `Retry-After` rounded up
+to whole delta seconds; an unavailable result returns HTTP 503. Focused HTTP tests
+verify these mappings, confirm that rejected requests do not call the publisher, and
+confirm that an allowed request is published and returns HTTP 202.
 
 ### Do Not Decide in Advance
 
-The exact number of instances or target performance metrics before a baseline measurement exists. HTTP `Retry-After` serialization, the load scenario, and measured quota values remain Stage 4 work.
+The exact number of instances or target performance metrics before a baseline
+measurement exists. The load scenario and measured quota values remain Stage 4 work.
 
 ## Stage 5: Deployment to AWS
 

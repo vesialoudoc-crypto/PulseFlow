@@ -30,8 +30,9 @@ instances. Configure the quota through `IngestionRateLimit:RequestLimit` and
 `IngestionRateLimit:WindowDuration`, and the Redis endpoint through
 `ConnectionStrings:Redis`.
 
-The rate-limit check will run before request-body reading and before RabbitMQ
-publication. An exhausted quota will return HTTP 429. Redis unavailability will return
+The rate-limit check runs before request-body reading and before RabbitMQ publication.
+An exhausted quota returns HTTP 429 with a delta-seconds `Retry-After` header. The
+header rounds the Redis TTL up to the next whole second. Redis unavailability returns
 HTTP 503, and no process-local fallback is permitted.
 
 The application owns one shared process-level StackExchange.Redis connection
@@ -50,14 +51,12 @@ allow/deny decision and the remaining TTL. A denied result exposes that TTL as
 - API instances will use one shared quota rather than independent local counters.
 - A Redis outage prevents ingestion instead of allowing the quota to be bypassed.
 - The body is not read and RabbitMQ is not contacted for a request rejected by the
-  limiter.
+  limiter; focused HTTP tests verify that the publisher is not called.
 - Redis availability becomes a dependency of ingestion availability.
-- The configuration foundation may be added before the limiter algorithm and endpoint
+- The configuration foundation was added before the limiter algorithm and endpoint
   integration.
 
 ## Explicit limitations
 
-- The controller does not perform the rate-limit check and has no HTTP 429 or 503
-  behavior yet.
-- HTTP `Retry-After` serialization, final quota values, client identity, load
-  scenarios, and measured scaling conclusions remain unresolved.
+- Final quota values, client identity, load scenarios, multi-instance execution, and
+  measured scaling conclusions remain unresolved.
