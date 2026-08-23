@@ -20,5 +20,8 @@ jobs:
       - name: Restore dependencies
         run: dotnet restore PulseFlow.slnx
 
+      - name: Build
+        run: dotnet build PulseFlow.slnx --no-restore
+
       - name: Test runner
         run: echo "CI works"
