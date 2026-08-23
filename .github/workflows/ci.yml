@@ -29,5 +29,8 @@ jobs:
       - name: Test
         run: dotnet test PulseFlow.slnx --no-build
 
+      - name: Cheack format
+        run: dotnet csharpier check .
+
       - name: Test runner
         run: echo "CI works"
