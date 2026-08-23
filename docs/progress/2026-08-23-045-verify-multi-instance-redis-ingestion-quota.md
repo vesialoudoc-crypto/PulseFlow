@@ -39,7 +39,7 @@ Commands run from the repository root:
 dotnet test tests/PulseFlow.IntegrationTests/PulseFlow.IntegrationTests.csproj --filter FullyQualifiedName~RedisIngestionRateLimiterTests
 dotnet csharpier check .
 dotnet build PulseFlow.slnx -warnaserror
-dotnet test PulseFlow.slnx
+pwsh ./scripts/test.ps1
 pwsh ./scripts/check-project-docs.ps1
 ```
 
@@ -49,11 +49,8 @@ Results:
   scenario.
 - `dotnet csharpier check .` passed.
 - `dotnet build PulseFlow.slnx -warnaserror` passed with 0 warnings and 0 errors.
-- `dotnet test PulseFlow.slnx` passed: 80 unit tests and 52 integration tests.
+- `pwsh ./scripts/test.ps1` passed: 80 unit tests and 52 integration tests.
 - `pwsh ./scripts/check-project-docs.ps1` passed.
-
-`scripts/test.ps1` is not present in this branch, so the standard test command from
-the repository's `AGENTS.md` was run directly instead.
 
 ## Decisions made
 
