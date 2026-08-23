@@ -363,7 +363,10 @@ counter. It returns the decision and remaining TTL. The limiter maps an allowed 
 an exceeded result with `RetryAfter`, or an unavailable result when the Redis operation
 fails. There is no retry, lock, cache, or local fallback counter.
 
-No HTTP endpoint uses the limiter contract yet.
+`EventsController` uses `IIngestionRateLimiter` before reading the request body or
+publishing the batch to RabbitMQ. An exceeded result returns HTTP 429 with a
+`Retry-After` header rounded up to whole delta seconds. An unavailable result returns
+HTTP 503. Rejected requests do not read the request body or call the publisher.
 
 ## Not yet defined
 
@@ -385,6 +388,6 @@ No HTTP endpoint uses the limiter contract yet.
 - production migration execution;
 - the concrete validation library or framework.
 
-HTTP `Retry-After` serialization, exact rate-limit values, client identity, and the
-load-test scenario remain undefined. Outbox and detailed RabbitMQ reliability choices
-remain unresolved.
+Final or measured rate-limit values, client identity, multi-instance verification, and
+the load-test scenario remain undefined. Outbox and detailed RabbitMQ reliability
+choices remain unresolved.
