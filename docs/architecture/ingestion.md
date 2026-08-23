@@ -352,12 +352,18 @@ already exhausted will result in HTTP 429; Redis unavailability will result in H
 503. There is no process-local fallback counter. See
 [ADR 0014](../decisions/0014-use-redis-for-global-ingestion-rate-limiting.md).
 
-The current implementation is infrastructure only: `ConnectionStrings:Redis` supplies
-the connection, and the process owns one shared `IConnectionMultiplexer`.
-`IngestionRateLimit:RequestLimit` and `IngestionRateLimit:WindowDuration` are required
-positive startup-validated settings. `IIngestionRateLimiter` is intentionally free of
-StackExchange.Redis types. No Redis algorithm or limiter implementation is registered,
-and no HTTP endpoint uses the contract yet.
+`ConnectionStrings:Redis` supplies the connection, and the process owns one shared
+`IConnectionMultiplexer`. `IngestionRateLimit:RequestLimit` and
+`IngestionRateLimit:WindowDuration` are required positive startup-validated settings.
+`RedisIngestionRateLimiter` is registered behind the Redis-independent
+`IIngestionRateLimiter` contract. It evaluates one atomic Lua script against
+`pulseflow:rate-limit:ingestion:global`: the script denies an exhausted counter, or
+increments the counter and applies its fixed-window TTL only when it creates the
+counter. It returns the decision and remaining TTL. The limiter maps an allowed result,
+an exceeded result with `RetryAfter`, or an unavailable result when the Redis operation
+fails. There is no retry, lock, cache, or local fallback counter.
+
+No HTTP endpoint uses the limiter contract yet.
 
 ## Not yet defined
 
@@ -379,6 +385,6 @@ and no HTTP endpoint uses the contract yet.
 - production migration execution;
 - the concrete validation library or framework.
 
-The Redis command or script implementation, exact rate-limit values, `Retry-After`
-policy, and load-test scenario remain undefined. Outbox and detailed RabbitMQ
-reliability choices remain unresolved.
+HTTP `Retry-After` serialization, exact rate-limit values, client identity, and the
+load-test scenario remain undefined. Outbox and detailed RabbitMQ reliability choices
+remain unresolved.

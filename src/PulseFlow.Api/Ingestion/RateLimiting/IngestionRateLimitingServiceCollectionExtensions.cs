@@ -33,6 +33,7 @@ public static class IngestionRateLimitingServiceCollectionExtensions
 
             return ConnectionMultiplexer.Connect(options);
         });
+        services.AddSingleton<IIngestionRateLimiter, RedisIngestionRateLimiter>();
 
         return services;
     }

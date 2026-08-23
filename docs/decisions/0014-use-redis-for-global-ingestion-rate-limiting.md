@@ -38,6 +38,13 @@ The application owns one shared process-level StackExchange.Redis connection
 multiplexer. Its application-facing limiter contract must not expose StackExchange.Redis
 types.
 
+The implementation uses one atomic Redis Lua script and the global key
+`pulseflow:rate-limit:ingestion:global`. The script denies when the current count is
+already at the configured limit. Otherwise, it increments the counter and assigns the
+fixed-window TTL only when that increment creates the counter. The script returns the
+allow/deny decision and the remaining TTL. A denied result exposes that TTL as
+`RetryAfter`; a Redis operation failure maps to the existing unavailable result.
+
 ## Consequences
 
 - API instances will use one shared quota rather than independent local counters.
@@ -50,9 +57,7 @@ types.
 
 ## Explicit limitations
 
-- The Redis command or script implementation is not selected or implemented yet.
-- No `IIngestionRateLimiter` implementation is registered yet.
 - The controller does not perform the rate-limit check and has no HTTP 429 or 503
   behavior yet.
-- `Retry-After` behavior, final quota values, client identity, load scenarios, and
-  measured scaling conclusions remain unresolved.
+- HTTP `Retry-After` serialization, final quota values, client identity, load
+  scenarios, and measured scaling conclusions remain unresolved.

@@ -245,21 +245,24 @@ The load test runs reproducibly and produces a clear report. The configuration, 
 
 ### Current implementation
 
-The Stage 4 infrastructure foundation is implemented. `StackExchange.Redis` is
+The Stage 4 Redis limiter foundation is implemented. `StackExchange.Redis` is
 registered as one shared process-level `IConnectionMultiplexer`, configured through
 `ConnectionStrings:Redis`. `IngestionRateLimit:RequestLimit` and
-`IngestionRateLimit:WindowDuration` are startup-validated. The accepted global,
-fixed-window design and fail-closed Redis-unavailable behavior are recorded in
+`IngestionRateLimit:WindowDuration` are startup-validated. The registered
+`RedisIngestionRateLimiter` implements the Redis-independent
+`IIngestionRateLimiter` contract with one atomic Lua script and the global key
+`pulseflow:rate-limit:ingestion:global`. It uses the accepted fixed-window algorithm,
+returns an exceeded result with the Redis TTL as `RetryAfter`, and fails closed with an
+unavailable result for a Redis operation failure. The accepted global scope and
+fail-closed behavior are recorded in
 [ADR 0014](decisions/0014-use-redis-for-global-ingestion-rate-limiting.md).
 
-No Redis rate-limit algorithm, limiter implementation, controller integration, request
-body ordering, HTTP 429/503 response, or RabbitMQ-publish prevention is implemented
-yet. The infrastructure exposes a Redis-independent `IIngestionRateLimiter` contract
-for that next slice.
+Controller integration, request-body ordering, HTTP 429/503 response, and RabbitMQ
+publish prevention are not implemented yet.
 
 ### Do Not Decide in Advance
 
-The exact number of instances or target performance metrics before a baseline measurement exists. The Redis command or script implementation, `Retry-After` policy, load scenario, and measured quota values remain Stage 4 work.
+The exact number of instances or target performance metrics before a baseline measurement exists. HTTP `Retry-After` serialization, the load scenario, and measured quota values remain Stage 4 work.
 
 ## Stage 5: Deployment to AWS
 

@@ -1,0 +1,4 @@
+﻿[*.cs]
+
+# IDE0300: Simplify collection initialization
+dotnet_diagnostic.IDE0300.severity = none
