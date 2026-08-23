@@ -343,6 +343,22 @@ expected rows appear. A focused real-broker test also verifies that `ConsumerCou
 registers two consumers on the configured queue by polling RabbitMQ queue metadata.
 These tests do not claim an ordering, distribution, or performance characteristic.
 
+## Distributed ingestion rate limiting
+
+Stage 4 has an accepted Redis-backed global quota design. All `PulseFlow.Api`
+instances will share one quota, using a fixed window. The limiter must run before the
+request body is read and before a batch is published to RabbitMQ. A quota that is
+already exhausted will result in HTTP 429; Redis unavailability will result in HTTP
+503. There is no process-local fallback counter. See
+[ADR 0014](../decisions/0014-use-redis-for-global-ingestion-rate-limiting.md).
+
+The current implementation is infrastructure only: `ConnectionStrings:Redis` supplies
+the connection, and the process owns one shared `IConnectionMultiplexer`.
+`IngestionRateLimit:RequestLimit` and `IngestionRateLimit:WindowDuration` are required
+positive startup-validated settings. `IIngestionRateLimiter` is intentionally free of
+StackExchange.Redis types. No Redis algorithm or limiter implementation is registered,
+and no HTTP endpoint uses the contract yet.
+
 ## Not yet defined
 
 - record, upload, and record-count limits;
@@ -363,6 +379,6 @@ These tests do not claim an ordering, distribution, or performance characteristi
 - production migration execution;
 - the concrete validation library or framework.
 
-Redis is not part of this implementation; it is reserved for Stage 4 distributed
-ingestion rate limiting across multiple `PulseFlow.Api` instances. Outbox and detailed
-RabbitMQ reliability choices remain unresolved.
+The Redis command or script implementation, exact rate-limit values, `Retry-After`
+policy, and load-test scenario remain undefined. Outbox and detailed RabbitMQ
+reliability choices remain unresolved.

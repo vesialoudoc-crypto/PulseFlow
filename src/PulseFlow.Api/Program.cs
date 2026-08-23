@@ -6,6 +6,7 @@ using PulseFlow.Api.Ingestion;
 using PulseFlow.Api.Ingestion.Messaging;
 using PulseFlow.Api.Ingestion.Ndjson;
 using PulseFlow.Api.Ingestion.Persistence;
+using PulseFlow.Api.Ingestion.RateLimiting;
 using PulseFlow.Api.Ingestion.Validation;
 using PulseFlow.Api.Persistence;
 using PulseFlow.Api.Persistence.Events;
@@ -36,6 +37,7 @@ builder.Services.AddSingleton<EventEnvelopeValidator>();
 
 builder.Services.AddScoped<IEventChunkStore, EfCoreEventChunkStore>();
 builder.Services.AddIngestionMessaging(builder.Configuration);
+builder.Services.AddIngestionRateLimiting(builder.Configuration);
 
 builder.Services.AddScoped<IngestEventsHandler>(services =>
 {

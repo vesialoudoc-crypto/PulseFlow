@@ -216,14 +216,14 @@ manual and separately defined. Retry queues, Outbox, and prefetch remain unresol
 
 ## Stage 4: Horizontal Scaling and Load
 
-**Status:** Not started
+**Status:** In progress
 
 ### Goals
 
 - Run multiple instances of applicable components.
 - Verify distribution and concurrent-processing correctness.
 - Introduce Redis-backed distributed ingestion rate limiting so multiple
-  `PulseFlow.Api` instances share client quota state.
+  `PulseFlow.Api` instances share one global quota state.
 - Reject an over-limit request with HTTP 429, with `Retry-After` where appropriate,
   before it is published to RabbitMQ.
 - Create a reproducible load scenario.
@@ -243,9 +243,23 @@ manual and separately defined. Retry queues, Outbox, and prefetch remain unresol
 
 The load test runs reproducibly and produces a clear report. The configuration, baseline metrics, identified constraint, change, and follow-up measurement are documented. Multiple `PulseFlow.Api` instances share Redis-backed rate-limit/quota state: process-local in-memory counters are not used because they would be incorrect when requests are distributed across instances. Redis stores this fast-changing operational state only; it is not the primary event store, generic cache, or batch-status store. Requests exceeding the accepted quota receive HTTP 429 and are not published to RabbitMQ. Multiple instances work correctly in the tested scenarios, and the limits of the conclusions are stated explicitly.
 
+### Current implementation
+
+The Stage 4 infrastructure foundation is implemented. `StackExchange.Redis` is
+registered as one shared process-level `IConnectionMultiplexer`, configured through
+`ConnectionStrings:Redis`. `IngestionRateLimit:RequestLimit` and
+`IngestionRateLimit:WindowDuration` are startup-validated. The accepted global,
+fixed-window design and fail-closed Redis-unavailable behavior are recorded in
+[ADR 0014](decisions/0014-use-redis-for-global-ingestion-rate-limiting.md).
+
+No Redis rate-limit algorithm, limiter implementation, controller integration, request
+body ordering, HTTP 429/503 response, or RabbitMQ-publish prevention is implemented
+yet. The infrastructure exposes a Redis-independent `IIngestionRateLimiter` contract
+for that next slice.
+
 ### Do Not Decide in Advance
 
-The exact number of instances or target performance metrics before a baseline measurement exists. The rate-limiting algorithm, quota values, time-window strategy, Redis command or script implementation, and Redis failure behavior remain Stage 4 decisions.
+The exact number of instances or target performance metrics before a baseline measurement exists. The Redis command or script implementation, `Retry-After` policy, load scenario, and measured quota values remain Stage 4 work.
 
 ## Stage 5: Deployment to AWS
 
