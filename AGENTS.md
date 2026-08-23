@@ -110,6 +110,6 @@ Run the project checks from the repository root:
 ```powershell
 dotnet csharpier check .
 dotnet build PulseFlow.slnx -warnaserror
-dotnet test PulseFlow.slnx
+pwsh ./scripts/test.ps1
 pwsh ./scripts/check-project-docs.ps1
 ```
