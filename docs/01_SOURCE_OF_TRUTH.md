@@ -105,8 +105,8 @@ Local execution, testing, and deployment must be documented and automated where 
 - the exact data model and migration strategy;
 - the boundary between synchronous and asynchronous work;
 - the queue technology and delivery guarantees;
-- the limiting algorithm, quota values, window strategy, Redis implementation, and
-  failure behavior for distributed ingestion rate limiting;
+- Redis command or script implementation, `Retry-After` policy, and measured quota
+  values for distributed ingestion rate limiting;
 - the client identity and access-control model;
 - the specific AWS services and network topology;
 - the number and size of instances;

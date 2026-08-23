@@ -79,9 +79,12 @@ namespace PulseFlow.IntegrationTests.Infrastructure
                     {
                         ["ConnectionStrings:PulseFlow"] = _connectionString,
                         ["ConnectionStrings:RabbitMq"] = _rabbitMqConnectionString,
+                        ["ConnectionStrings:Redis"] = "localhost:6379,abortConnect=false",
                         ["RabbitMq:QueueName"] = _queueName,
                         ["RabbitMq:ConsumerCount"] = _consumerCount.ToString(),
-                        ["Ingestion:ChunkCapacity"] = "2"
+                        ["Ingestion:ChunkCapacity"] = "2",
+                        ["IngestionRateLimit:RequestLimit"] = "100",
+                        ["IngestionRateLimit:WindowDuration"] = "00:01:00"
                     });
             });
 

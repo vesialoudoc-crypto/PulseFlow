@@ -343,6 +343,31 @@ expected rows appear. A focused real-broker test also verifies that `ConsumerCou
 registers two consumers on the configured queue by polling RabbitMQ queue metadata.
 These tests do not claim an ordering, distribution, or performance characteristic.
 
+## Distributed ingestion rate limiting
+
+Stage 4 has an accepted Redis-backed global quota design. All `PulseFlow.Api`
+instances will share one quota, using a fixed window. The limiter must run before the
+request body is read and before a batch is published to RabbitMQ. A quota that is
+already exhausted will result in HTTP 429; Redis unavailability will result in HTTP
+503. There is no process-local fallback counter. See
+[ADR 0014](../decisions/0014-use-redis-for-global-ingestion-rate-limiting.md).
+
+`ConnectionStrings:Redis` supplies the connection, and the process owns one shared
+`IConnectionMultiplexer`. `IngestionRateLimit:RequestLimit` and
+`IngestionRateLimit:WindowDuration` are required positive startup-validated settings.
+`RedisIngestionRateLimiter` is registered behind the Redis-independent
+`IIngestionRateLimiter` contract. It evaluates one atomic Lua script against
+`pulseflow:rate-limit:ingestion:global`: the script denies an exhausted counter, or
+increments the counter and applies its fixed-window TTL only when it creates the
+counter. It returns the decision and remaining TTL. The limiter maps an allowed result,
+an exceeded result with `RetryAfter`, or an unavailable result when the Redis operation
+fails. There is no retry, lock, cache, or local fallback counter.
+
+`EventsController` uses `IIngestionRateLimiter` before reading the request body or
+publishing the batch to RabbitMQ. An exceeded result returns HTTP 429 with a
+`Retry-After` header rounded up to whole delta seconds. An unavailable result returns
+HTTP 503. Rejected requests do not read the request body or call the publisher.
+
 ## Not yet defined
 
 - record, upload, and record-count limits;
@@ -363,6 +388,6 @@ These tests do not claim an ordering, distribution, or performance characteristi
 - production migration execution;
 - the concrete validation library or framework.
 
-Redis is not part of this implementation; it is reserved for Stage 4 distributed
-ingestion rate limiting across multiple `PulseFlow.Api` instances. Outbox and detailed
-RabbitMQ reliability choices remain unresolved.
+Final or measured rate-limit values, client identity, multi-instance verification, and
+the load-test scenario remain undefined. Outbox and detailed RabbitMQ reliability
+choices remain unresolved.

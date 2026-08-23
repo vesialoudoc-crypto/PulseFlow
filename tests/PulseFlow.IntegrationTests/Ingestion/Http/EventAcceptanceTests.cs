@@ -7,6 +7,7 @@ using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.DependencyInjection.Extensions;
 using PulseFlow.Api.Ingestion.Messaging;
+using PulseFlow.Api.Ingestion.RateLimiting;
 using PulseFlow.IntegrationTests.Infrastructure;
 
 namespace PulseFlow.IntegrationTests.Ingestion.Http;
@@ -51,6 +52,71 @@ public sealed class EventAcceptanceTests
     }
 
     [Fact]
+    public async Task PostEvents_RateLimitExceeded_ReturnsTooManyRequestsAndDoesNotPublish()
+    {
+        // Arrange
+        var publisher = new RecordingIngestionBatchPublisher();
+        var retryAfter = TimeSpan.FromMilliseconds(1500);
+        using var factory = CreateFactory(
+            publisher,
+            new FixedIngestionRateLimiter(
+                new IngestionRateLimitResult(IngestionRateLimitStatus.Exceeded, retryAfter)));
+        using var client = factory.CreateClient();
+        using var content = CreateNdjsonContent(
+            Encoding.UTF8.GetBytes("{\"type\":\"event\"}\n"));
+
+        // Act
+        using var response = await client.PostAsync("/api/events", content);
+
+        // Assert
+        Assert.Equal(HttpStatusCode.TooManyRequests, response.StatusCode);
+        Assert.Equal("2", response.Headers.RetryAfter?.ToString());
+        Assert.Equal(0, publisher.PublishCallCount);
+    }
+
+    [Fact]
+    public async Task PostEvents_RateLimitUnavailable_ReturnsServiceUnavailableAndDoesNotPublish()
+    {
+        // Arrange
+        var publisher = new RecordingIngestionBatchPublisher();
+        using var factory = CreateFactory(
+            publisher,
+            new FixedIngestionRateLimiter(
+                new IngestionRateLimitResult(IngestionRateLimitStatus.Unavailable)));
+        using var client = factory.CreateClient();
+        using var content = CreateNdjsonContent(
+            Encoding.UTF8.GetBytes("{\"type\":\"event\"}\n"));
+
+        // Act
+        using var response = await client.PostAsync("/api/events", content);
+
+        // Assert
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+        Assert.Equal(0, publisher.PublishCallCount);
+    }
+
+    [Fact]
+    public async Task PostEvents_RateLimitAllowed_PublishesBatchAndReturnsAccepted()
+    {
+        // Arrange
+        var publisher = new RecordingIngestionBatchPublisher();
+        using var factory = CreateFactory(
+            publisher,
+            new FixedIngestionRateLimiter(
+                new IngestionRateLimitResult(IngestionRateLimitStatus.Allowed)));
+        using var client = factory.CreateClient();
+        using var content = CreateNdjsonContent(
+            Encoding.UTF8.GetBytes("{\"type\":\"event\"}\n"));
+
+        // Act
+        using var response = await client.PostAsync("/api/events", content);
+
+        // Assert
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        Assert.Equal(1, publisher.PublishCallCount);
+    }
+
+    [Fact]
     public async Task PostEvents_MalformedNdjsonAndPublisherSucceeds_ReturnsAccepted()
     {
         // Arrange
@@ -92,7 +158,8 @@ public sealed class EventAcceptanceTests
     #region Test helpers
 
     private static WebApplicationFactory<Program> CreateFactory(
-        IIngestionBatchPublisher publisher)
+        IIngestionBatchPublisher publisher,
+        IIngestionRateLimiter? rateLimiter = null)
     {
         var factory = new PulseFlowWebApplicationFactory<Program>(
             "Host=localhost;Database=pulseflow_tests;Username=postgres;Password=postgres");
@@ -103,6 +170,11 @@ public sealed class EventAcceptanceTests
             {
                 services.RemoveAll<IIngestionBatchPublisher>();
                 services.AddSingleton(publisher);
+                services.RemoveAll<IIngestionRateLimiter>();
+                services.AddSingleton(
+                    rateLimiter
+                    ?? new FixedIngestionRateLimiter(
+                        new IngestionRateLimitResult(IngestionRateLimitStatus.Allowed)));
             });
         });
     }
@@ -127,15 +199,33 @@ public sealed class EventAcceptanceTests
 
         public byte[]? PublishedBatch { get; private set; }
 
+        public int PublishCallCount { get; private set; }
+
         public Task PublishAsync(
             ReadOnlyMemory<byte> rawBatch,
             CancellationToken cancellationToken)
         {
+            PublishCallCount++;
             PublishedBatch = rawBatch.ToArray();
 
             return _exception is null
                 ? Task.CompletedTask
                 : Task.FromException(_exception);
+        }
+    }
+
+    private sealed class FixedIngestionRateLimiter : IIngestionRateLimiter
+    {
+        private readonly IngestionRateLimitResult _result;
+
+        public FixedIngestionRateLimiter(IngestionRateLimitResult result)
+        {
+            _result = result;
+        }
+
+        public Task<IngestionRateLimitResult> TryAllowAsync(CancellationToken ct)
+        {
+            return Task.FromResult(_result);
         }
     }
 
