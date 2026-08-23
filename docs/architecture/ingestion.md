@@ -368,6 +368,13 @@ publishing the batch to RabbitMQ. An exceeded result returns HTTP 429 with a
 `Retry-After` header rounded up to whole delta seconds. An unavailable result returns
 HTTP 503. Rejected requests do not read the request body or call the publisher.
 
+One integration test starts one Redis Testcontainer and two independent
+`PulseFlow.Api` test hosts configured with its same connection string. With a global
+limit of four requests in one minute, alternating four accepted requests between the
+hosts makes a fifth request through the first host return HTTP 429 with `Retry-After`.
+The shared recording publisher observes exactly four calls. This verifies shared quota
+state across the two DI containers; it is not a load or performance measurement.
+
 ## Not yet defined
 
 - record, upload, and record-count limits;
