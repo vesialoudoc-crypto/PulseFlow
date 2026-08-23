@@ -23,5 +23,8 @@ jobs:
       - name: Build
         run: dotnet build PulseFlow.slnx --no-restore
 
+      - name: Test
+        run: dotnet test PulseFlow.slnx --no-build
+
       - name: Test runner
         run: echo "CI works"
