@@ -11,14 +11,9 @@ internal sealed class RabbitMqConnectionManager : IAsyncDisposable
     private bool _isInitialized;
     private bool _isDisposed;
 
-    public RabbitMqConnectionManager(
-        string connectionString,
-        RabbitMqOptions options)
+    public RabbitMqConnectionManager(string connectionString, RabbitMqOptions options)
     {
-        _connectionFactory = new ConnectionFactory
-        {
-            Uri = new Uri(connectionString)
-        };
+        _connectionFactory = new ConnectionFactory { Uri = new Uri(connectionString) };
         _options = options;
     }
 
@@ -57,16 +52,13 @@ internal sealed class RabbitMqConnectionManager : IAsyncDisposable
         }
     }
 
-    public async ValueTask<IChannel> CreateChannelAsync(
-        CreateChannelOptions? options,
-        CancellationToken ct)
+    public async ValueTask<IChannel> CreateChannelAsync(CreateChannelOptions? options, CancellationToken ct)
     {
         await InitializeAsync(ct);
 
-        if(_connection is null) 
+        if (_connection is null)
         {
-            throw new InvalidOperationException(
-            "RabbitMQ connection is not initialized.");
+            throw new InvalidOperationException("RabbitMQ connection is not initialized.");
         }
 
         return await _connection.CreateChannelAsync(options, ct);
@@ -103,18 +95,14 @@ internal sealed class RabbitMqConnectionManager : IAsyncDisposable
         ObjectDisposedException.ThrowIf(_isDisposed, this);
     }
 
-    private async Task DeclareDeadLetterTopologyAsync(
-        IChannel channel,
-        CancellationToken ct)
+    private async Task DeclareDeadLetterTopologyAsync(IChannel channel, CancellationToken ct)
     {
         await DeclareDeadLetterExchangeAsync(channel, ct);
         await DeclareDeadLetterQueueAsync(channel, ct);
         await BindDeadLetterQueueAsync(channel, ct);
     }
 
-    private Task DeclareDeadLetterExchangeAsync(
-        IChannel channel,
-        CancellationToken ct)
+    private Task DeclareDeadLetterExchangeAsync(IChannel channel, CancellationToken ct)
     {
         return channel.ExchangeDeclareAsync(
             exchange: _options.DeadLetterExchangeName,
@@ -124,12 +112,11 @@ internal sealed class RabbitMqConnectionManager : IAsyncDisposable
             arguments: null,
             passive: false,
             noWait: false,
-            cancellationToken: ct);
+            cancellationToken: ct
+        );
     }
 
-    private Task DeclareDeadLetterQueueAsync(
-        IChannel channel,
-        CancellationToken ct)
+    private Task DeclareDeadLetterQueueAsync(IChannel channel, CancellationToken ct)
     {
         return channel.QueueDeclareAsync(
             queue: _options.DeadLetterQueueName,
@@ -137,31 +124,29 @@ internal sealed class RabbitMqConnectionManager : IAsyncDisposable
             exclusive: false,
             autoDelete: false,
             arguments: null,
-            cancellationToken: ct);
+            cancellationToken: ct
+        );
     }
 
-    private Task BindDeadLetterQueueAsync(
-        IChannel channel,
-        CancellationToken ct)
+    private Task BindDeadLetterQueueAsync(IChannel channel, CancellationToken ct)
     {
         return channel.QueueBindAsync(
             queue: _options.DeadLetterQueueName,
             exchange: _options.DeadLetterExchangeName,
             routingKey: _options.DeadLetterRoutingKey,
             arguments: null,
-            cancellationToken: ct);
+            cancellationToken: ct
+        );
     }
 
-    private Task DeclareMainQueueAsync(
-        IChannel topologyChannel,
-        CancellationToken ct)
+    private Task DeclareMainQueueAsync(IChannel topologyChannel, CancellationToken ct)
     {
         // Existing queues must be recreated manually if these declaration arguments change.
         // RabbitMQ uses these standard queue arguments to route rejected messages to the DLX.
         var arguments = new Dictionary<string, object?>
         {
             ["x-dead-letter-exchange"] = _options.DeadLetterExchangeName,
-            ["x-dead-letter-routing-key"] = _options.DeadLetterRoutingKey
+            ["x-dead-letter-routing-key"] = _options.DeadLetterRoutingKey,
         };
 
         return topologyChannel.QueueDeclareAsync(
@@ -170,7 +155,8 @@ internal sealed class RabbitMqConnectionManager : IAsyncDisposable
             exclusive: false,
             autoDelete: false,
             arguments: arguments,
-            cancellationToken: ct);
+            cancellationToken: ct
+        );
     }
 
     private async Task CleanupFailedInitializationAsync()

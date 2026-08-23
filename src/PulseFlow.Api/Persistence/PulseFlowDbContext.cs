@@ -6,9 +6,7 @@ namespace PulseFlow.Api.Persistence;
 public sealed class PulseFlowDbContext : DbContext
 {
     public PulseFlowDbContext(DbContextOptions<PulseFlowDbContext> options)
-        : base(options)
-    {
-    }
+        : base(options) { }
 
     public DbSet<EventRecord> EventRecords => Set<EventRecord>();
 

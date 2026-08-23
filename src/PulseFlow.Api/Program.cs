@@ -12,24 +12,24 @@ using PulseFlow.Api.Persistence.Events;
 
 var builder = WebApplication.CreateBuilder(args);
 
-var connectionString =
-    builder.Configuration.GetConnectionString("PulseFlow")
-    ?? throw new InvalidOperationException(
-        "Connection string 'PulseFlow' is required.");
+string? connectionString = builder.Configuration.GetConnectionString("PulseFlow");
+if (connectionString is null)
+{
+    throw new InvalidOperationException("Connection string 'PulseFlow' is required.");
+}
 
 builder.Services.AddControllers();
 
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
 
-builder.Services
-    .AddOptions<IngestionOptions>()
+builder
+    .Services.AddOptions<IngestionOptions>()
     .Bind(builder.Configuration.GetSection(IngestionOptions.SectionName))
     .ValidateDataAnnotations()
     .ValidateOnStart();
 
-builder.Services.AddDbContext<PulseFlowDbContext>(
-    options => options.UseNpgsql(connectionString));
+builder.Services.AddDbContext<PulseFlowDbContext>(options => options.UseNpgsql(connectionString));
 
 builder.Services.AddSingleton<NdjsonRecordReader>();
 builder.Services.AddSingleton<EventEnvelopeValidator>();
@@ -39,48 +39,45 @@ builder.Services.AddIngestionMessaging(builder.Configuration);
 
 builder.Services.AddScoped<IngestEventsHandler>(services =>
 {
-    var options = services
-        .GetRequiredService<IOptions<IngestionOptions>>()
-        .Value;
+    var options = services.GetRequiredService<IOptions<IngestionOptions>>().Value;
 
     return new IngestEventsHandler(
         services.GetRequiredService<EventEnvelopeValidator>(),
         services.GetRequiredService<IEventChunkStore>(),
-        options.ChunkCapacity);
+        options.ChunkCapacity
+    );
 });
 
 builder.Services.AddOpenApi(options =>
 {
-    options.AddOperationTransformer((operation, context, _) =>
-    {
-        if (string.Equals(
-                context.Description.HttpMethod,
-                HttpMethods.Post,
-                StringComparison.OrdinalIgnoreCase) &&
-            string.Equals(
-                context.Description.RelativePath,
-                "api/events",
-                StringComparison.OrdinalIgnoreCase))
+    options.AddOperationTransformer(
+        (operation, context, _) =>
         {
-            operation.RequestBody = new OpenApiRequestBody
+            if (
+                string.Equals(context.Description.HttpMethod, HttpMethods.Post, StringComparison.OrdinalIgnoreCase)
+                && string.Equals(context.Description.RelativePath, "api/events", StringComparison.OrdinalIgnoreCase)
+            )
             {
-                Required = false,
-                Content = new Dictionary<string, OpenApiMediaType>
+                operation.RequestBody = new OpenApiRequestBody
                 {
-                    ["application/x-ndjson"] = new()
+                    Required = false,
+                    Content = new Dictionary<string, OpenApiMediaType>
                     {
-                        Schema = new OpenApiSchema
+                        ["application/x-ndjson"] = new()
                         {
-                            Type = JsonSchemaType.String,
-                            Description = "Raw NDJSON batch accepted for asynchronous processing."
-                        }
-                    }
-                }
-            };
-        }
+                            Schema = new OpenApiSchema
+                            {
+                                Type = JsonSchemaType.String,
+                                Description = "Raw NDJSON batch accepted for asynchronous processing.",
+                            },
+                        },
+                    },
+                };
+            }
 
-        return Task.CompletedTask;
-    });
+            return Task.CompletedTask;
+        }
+    );
 });
 
 var app = builder.Build();
@@ -94,9 +91,7 @@ if (app.Environment.IsDevelopment())
 
     app.UseSwaggerUI(options =>
     {
-        options.SwaggerEndpoint(
-            "/openapi/v1.json",
-            "PulseFlow v1");
+        options.SwaggerEndpoint("/openapi/v1.json", "PulseFlow v1");
     });
 }
 

@@ -10,21 +10,22 @@ public sealed class NdjsonRecordReader
 
     public async IAsyncEnumerable<NdjsonRecordResult> ReadAsync(
         Stream stream,
-        [EnumeratorCancellation] CancellationToken cancellationToken = default)
+        [EnumeratorCancellation] CancellationToken ct = default
+    )
     {
         ArgumentNullException.ThrowIfNull(stream);
 
         // Keep only a fixed-size input block and the bytes of the current record.
-        var readBuffer = new byte[ReadBufferSize];
+        byte[] readBuffer = new byte[ReadBufferSize];
         var currentRecord = new ArrayBufferWriter<byte>();
         long recordNumber = 0;
 
         while (true)
         {
             // Step 1: read the next block without waiting for the full upload.
-            cancellationToken.ThrowIfCancellationRequested();
+            ct.ThrowIfCancellationRequested();
 
-            var bytesRead = await stream.ReadAsync(readBuffer.AsMemory(), cancellationToken);
+            int bytesRead = await stream.ReadAsync(readBuffer.AsMemory(), ct);
 
             if (bytesRead == 0)
             {
@@ -32,24 +33,23 @@ public sealed class NdjsonRecordReader
             }
 
             // Step 2: append bytes to the current record until each LF boundary.
-            var unprocessedStart = 0;
+            int unprocessedStart = 0;
 
             while (unprocessedStart < bytesRead)
             {
-                var lineFeedIndex = Array.IndexOf(
+                int lineFeedIndex = Array.IndexOf(
                     readBuffer,
                     (byte)'\n',
                     unprocessedStart,
-                    bytesRead - unprocessedStart);
+                    bytesRead - unprocessedStart
+                );
 
-                var segmentEnd = lineFeedIndex < 0 ? bytesRead : lineFeedIndex;
-                var segmentLength = segmentEnd - unprocessedStart;
+                int segmentEnd = lineFeedIndex < 0 ? bytesRead : lineFeedIndex;
+                int segmentLength = segmentEnd - unprocessedStart;
 
                 if (segmentLength > 0)
                 {
-                    readBuffer
-                        .AsSpan(unprocessedStart, segmentLength)
-                        .CopyTo(currentRecord.GetSpan(segmentLength));
+                    readBuffer.AsSpan(unprocessedStart, segmentLength).CopyTo(currentRecord.GetSpan(segmentLength));
                     currentRecord.Advance(segmentLength);
                 }
 
@@ -61,14 +61,13 @@ public sealed class NdjsonRecordReader
                 // Step 3: LF completes a record. Remove CR only when it is part of CRLF.
                 var completedRecord = currentRecord.WrittenMemory;
 
-                if (completedRecord.Length > 0 &&
-                    completedRecord.Span[^1] == (byte)'\r')
+                if (completedRecord.Length > 0 && completedRecord.Span[^1] == (byte)'\r')
                 {
                     completedRecord = completedRecord[..^1];
                 }
 
                 recordNumber++;
-                cancellationToken.ThrowIfCancellationRequested();
+                ct.ThrowIfCancellationRequested();
 
                 // Step 4: parse this record once and yield parsed JSON or malformed input.
                 yield return ParseRecord(completedRecord, recordNumber);
@@ -82,15 +81,13 @@ public sealed class NdjsonRecordReader
         if (currentRecord.WrittenCount > 0)
         {
             recordNumber++;
-            cancellationToken.ThrowIfCancellationRequested();
+            ct.ThrowIfCancellationRequested();
 
             yield return ParseRecord(currentRecord.WrittenMemory, recordNumber);
         }
     }
 
-    private static NdjsonRecordResult ParseRecord(
-        ReadOnlyMemory<byte> record,
-        long recordNumber)
+    private static NdjsonRecordResult ParseRecord(ReadOnlyMemory<byte> record, long recordNumber)
     {
         try
         {

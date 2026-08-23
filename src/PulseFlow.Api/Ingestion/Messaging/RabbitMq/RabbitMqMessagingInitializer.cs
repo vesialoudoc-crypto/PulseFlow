@@ -9,7 +9,8 @@ internal sealed class RabbitMqMessagingInitializer : IHostedService
 
     public RabbitMqMessagingInitializer(
         RabbitMqConnectionManager connectionManager,
-        RabbitMqIngestionBatchPublisher publisher)
+        RabbitMqIngestionBatchPublisher publisher
+    )
     {
         _connectionManager = connectionManager;
         _publisher = publisher;

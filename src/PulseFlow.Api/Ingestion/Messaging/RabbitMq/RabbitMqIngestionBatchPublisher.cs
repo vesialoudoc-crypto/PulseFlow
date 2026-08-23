@@ -13,9 +13,7 @@ internal sealed class RabbitMqIngestionBatchPublisher : IIngestionBatchPublisher
 
     internal IChannel? Channel => _channel;
 
-    public RabbitMqIngestionBatchPublisher(
-        RabbitMqConnectionManager connectionManager,
-        RabbitMqOptions options)
+    public RabbitMqIngestionBatchPublisher(RabbitMqConnectionManager connectionManager, RabbitMqOptions options)
     {
         _connectionManager = connectionManager;
         _options = options;
@@ -39,11 +37,10 @@ internal sealed class RabbitMqIngestionBatchPublisher : IIngestionBatchPublisher
             {
                 var channelOptions = new CreateChannelOptions(
                     publisherConfirmationsEnabled: true,
-                    publisherConfirmationTrackingEnabled: true);
+                    publisherConfirmationTrackingEnabled: true
+                );
 
-                _channel = await _connectionManager.CreateChannelAsync(
-                    channelOptions,
-                    ct);
+                _channel = await _connectionManager.CreateChannelAsync(channelOptions, ct);
             }
         }
         finally
@@ -52,9 +49,7 @@ internal sealed class RabbitMqIngestionBatchPublisher : IIngestionBatchPublisher
         }
     }
 
-    public async Task PublishAsync(
-        ReadOnlyMemory<byte> rawBatch,
-        CancellationToken ct)
+    public async Task PublishAsync(ReadOnlyMemory<byte> rawBatch, CancellationToken ct)
     {
         await InitializeAsync(ct);
         // Many requests share this channel, so publish one batch at a time.
@@ -62,24 +57,24 @@ internal sealed class RabbitMqIngestionBatchPublisher : IIngestionBatchPublisher
 
         try
         {
-            if(_channel is null)
+            if (_channel is null)
             {
-                throw new InvalidOperationException(
-                "RabbitMQ publisher channel is not initialized.");
+                throw new InvalidOperationException("RabbitMQ publisher channel is not initialized.");
             }
 
             await _channel.BasicPublishAsync(
-                    exchange: string.Empty,
-                    routingKey: _options.QueueName,
-                    // Do not silently lose the batch if the target queue does not exist.
-                    mandatory: true,
-                    basicProperties: new BasicProperties
-                    {
-                        ContentType = "application/x-ndjson",
-                        DeliveryMode = DeliveryModes.Persistent
-                    },
-                    body: rawBatch,
-                    cancellationToken: ct);
+                exchange: string.Empty,
+                routingKey: _options.QueueName,
+                // Do not silently lose the batch if the target queue does not exist.
+                mandatory: true,
+                basicProperties: new BasicProperties
+                {
+                    ContentType = "application/x-ndjson",
+                    DeliveryMode = DeliveryModes.Persistent,
+                },
+                body: rawBatch,
+                cancellationToken: ct
+            );
         }
         finally
         {

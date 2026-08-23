@@ -17,17 +17,14 @@ public sealed class EfCoreEventChunkStore : IEventChunkStore
         _dbContext = dbContext;
     }
 
-    public async Task StoreAsync(
-        IReadOnlyCollection<EventEnvelope> events,
-        CancellationToken cancellationToken = default)
+    public async Task StoreAsync(IReadOnlyCollection<EventEnvelope> events, CancellationToken ct = default)
     {
         if (events.Count == 0)
         {
             return;
         }
 
-        await using var transaction = await _dbContext.Database
-            .BeginTransactionAsync(cancellationToken);
+        await using var transaction = await _dbContext.Database.BeginTransactionAsync(ct);
         var connection = (NpgsqlConnection)_dbContext.Database.GetDbConnection();
         var databaseTransaction = (NpgsqlTransaction)transaction.GetDbTransaction();
 
@@ -35,11 +32,11 @@ public sealed class EfCoreEventChunkStore : IEventChunkStore
         {
             Connection = connection,
             Transaction = databaseTransaction,
-            CommandText = CreateInsertCommand(events)
+            CommandText = CreateInsertCommand(events),
         };
 
         var receivedAt = DateTime.UtcNow;
-        var index = 0;
+        int index = 0;
 
         foreach (var envelope in events)
         {
@@ -47,27 +44,21 @@ public sealed class EfCoreEventChunkStore : IEventChunkStore
             command.Parameters.AddWithValue($"eventId{index}", NpgsqlDbType.Uuid, envelope.EventId);
             command.Parameters.AddWithValue($"type{index}", NpgsqlDbType.Text, envelope.Type);
             command.Parameters.AddWithValue($"source{index}", NpgsqlDbType.Text, envelope.Source);
-            command.Parameters.AddWithValue(
-                $"occurredAt{index}",
-                NpgsqlDbType.TimestampTz,
-                envelope.OccurredAt);
+            command.Parameters.AddWithValue($"occurredAt{index}", NpgsqlDbType.TimestampTz, envelope.OccurredAt);
             command.Parameters.AddWithValue($"receivedAt{index}", NpgsqlDbType.TimestampTz, receivedAt);
-            command.Parameters.AddWithValue(
-                $"payload{index}",
-                NpgsqlDbType.Jsonb,
-                envelope.Payload.GetRawText());
+            command.Parameters.AddWithValue($"payload{index}", NpgsqlDbType.Jsonb, envelope.Payload.GetRawText());
             index++;
         }
 
-        await command.ExecuteNonQueryAsync(cancellationToken);
-        await transaction.CommitAsync(cancellationToken);
+        await command.ExecuteNonQueryAsync(ct);
+        await transaction.CommitAsync(ct);
     }
 
     private static string CreateInsertCommand(IReadOnlyCollection<EventEnvelope> events)
     {
         var values = new StringBuilder();
 
-        for (var index = 0; index < events.Count; index++)
+        for (int index = 0; index < events.Count; index++)
         {
             if (index > 0)
             {
@@ -75,11 +66,12 @@ public sealed class EfCoreEventChunkStore : IEventChunkStore
             }
 
             values.Append(
-                $"(@id{index}, @eventId{index}, @type{index}, @source{index}, " +
-                $"@occurredAt{index}, @receivedAt{index}, @payload{index})");
+                $"(@id{index}, @eventId{index}, @type{index}, @source{index}, "
+                    + $"@occurredAt{index}, @receivedAt{index}, @payload{index})"
+            );
         }
 
-        return "INSERT INTO events (id, event_id, type, source, occurred_at, received_at, payload) " +
-            $"VALUES {values} ON CONFLICT (source, event_id) DO NOTHING;";
+        return "INSERT INTO events (id, event_id, type, source, occurred_at, received_at, payload) "
+            + $"VALUES {values} ON CONFLICT (source, event_id) DO NOTHING;";
     }
 }

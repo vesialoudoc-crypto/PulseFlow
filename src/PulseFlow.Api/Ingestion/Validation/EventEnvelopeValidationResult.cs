@@ -23,14 +23,12 @@ public enum EventEnvelopeValidationErrorCode
     OccurredAtNotUtcZ,
     PayloadMissing,
     PayloadNull,
-    PayloadNotObject
+    PayloadNotObject,
 }
 
 public sealed class EventEnvelopeValidationError
 {
-    public EventEnvelopeValidationError(
-        EventEnvelopeValidationErrorCode code,
-        string jsonPath)
+    public EventEnvelopeValidationError(EventEnvelopeValidationErrorCode code, string jsonPath)
     {
         Code = code;
         JsonPath = jsonPath;
@@ -43,9 +41,7 @@ public sealed class EventEnvelopeValidationError
 
 public sealed class EventEnvelopeValidationResult
 {
-    private EventEnvelopeValidationResult(
-        EventEnvelope? envelope,
-        IReadOnlyList<EventEnvelopeValidationError> errors)
+    private EventEnvelopeValidationResult(EventEnvelope? envelope, IReadOnlyList<EventEnvelopeValidationError> errors)
     {
         Envelope = envelope;
         Errors = errors;
@@ -59,13 +55,10 @@ public sealed class EventEnvelopeValidationResult
 
     internal static EventEnvelopeValidationResult Valid(EventEnvelope envelope)
     {
-        return new EventEnvelopeValidationResult(
-            envelope,
-            Array.Empty<EventEnvelopeValidationError>());
+        return new EventEnvelopeValidationResult(envelope, Array.Empty<EventEnvelopeValidationError>());
     }
 
-    internal static EventEnvelopeValidationResult Invalid(
-        IEnumerable<EventEnvelopeValidationError> errors)
+    internal static EventEnvelopeValidationResult Invalid(IEnumerable<EventEnvelopeValidationError> errors)
     {
         // The result must not depend on the input error list.
         var retainedErrors = Array.AsReadOnly(errors.ToArray());

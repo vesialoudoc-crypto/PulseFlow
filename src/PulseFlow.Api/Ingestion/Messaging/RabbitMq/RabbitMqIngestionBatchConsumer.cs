@@ -7,8 +7,7 @@ internal sealed class RabbitMqIngestionBatchConsumer : IIngestionBatchConsumer
 {
     private readonly IChannel _channel;
     private readonly string _queueName;
-    private readonly TaskCompletionSource _callbackFailure = new(
-        TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _callbackFailure = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private string? _consumerTag;
     private bool _isDisposed;
 
@@ -18,14 +17,12 @@ internal sealed class RabbitMqIngestionBatchConsumer : IIngestionBatchConsumer
         _queueName = queueName;
     }
 
-    public async Task ConsumeAsync(
-        IngestionBatchHandler handler,
-        CancellationToken cancellationToken)
+    public async Task ConsumeAsync(IngestionBatchHandler handler, CancellationToken ct)
     {
         ArgumentNullException.ThrowIfNull(handler);
 
-        await StartAsync(handler, cancellationToken);
-        await _callbackFailure.Task.WaitAsync(cancellationToken);
+        await StartAsync(handler, ct);
+        await _callbackFailure.Task.WaitAsync(ct);
     }
 
     public async ValueTask DisposeAsync()
@@ -41,10 +38,7 @@ internal sealed class RabbitMqIngestionBatchConsumer : IIngestionBatchConsumer
         {
             if (_consumerTag is not null)
             {
-                await _channel.BasicCancelAsync(
-                    _consumerTag,
-                    noWait: false,
-                    CancellationToken.None);
+                await _channel.BasicCancelAsync(_consumerTag, noWait: false, CancellationToken.None);
                 _consumerTag = null;
             }
         }
@@ -54,9 +48,7 @@ internal sealed class RabbitMqIngestionBatchConsumer : IIngestionBatchConsumer
         }
     }
 
-    private async Task StartAsync(
-        IngestionBatchHandler handler,
-        CancellationToken cancellationToken)
+    private async Task StartAsync(IngestionBatchHandler handler, CancellationToken cancellationToken)
     {
         if (_consumerTag is not null)
         {
@@ -72,7 +64,8 @@ internal sealed class RabbitMqIngestionBatchConsumer : IIngestionBatchConsumer
             queue: _queueName,
             autoAck: false,
             consumer: consumer,
-            cancellationToken: cancellationToken);
+            cancellationToken: cancellationToken
+        );
 
         async Task OnReceivedAsync(object _, BasicDeliverEventArgs eventArgs)
         {
@@ -84,10 +77,7 @@ internal sealed class RabbitMqIngestionBatchConsumer : IIngestionBatchConsumer
                 // The application owns processing and settlement, not RabbitMQ primitives.
                 await handler(delivery, cancellationToken);
             }
-            catch (OperationCanceledException)
-                when (cancellationToken.IsCancellationRequested)
-            {
-            }
+            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
             catch (Exception exception)
             {
                 _callbackFailure.TrySetException(exception);
@@ -100,23 +90,14 @@ internal sealed class RabbitMqIngestionBatchConsumer : IIngestionBatchConsumer
     {
         Task AcknowledgeAsync(CancellationToken cancellationToken)
         {
-            return _channel.BasicAckAsync(
-                eventArgs.DeliveryTag,
-                multiple: false,
-                cancellationToken).AsTask();
+            return _channel.BasicAckAsync(eventArgs.DeliveryTag, multiple: false, cancellationToken).AsTask();
         }
 
         Task RejectAsync(CancellationToken cancellationToken)
         {
-            return _channel.BasicRejectAsync(
-                eventArgs.DeliveryTag,
-                requeue: false,
-                cancellationToken).AsTask();
+            return _channel.BasicRejectAsync(eventArgs.DeliveryTag, requeue: false, cancellationToken).AsTask();
         }
 
-        return new IngestionBatchDelivery(
-            eventArgs.Body.ToArray(),
-            AcknowledgeAsync,
-            RejectAsync);
+        return new IngestionBatchDelivery(eventArgs.Body.ToArray(), AcknowledgeAsync, RejectAsync);
     }
 }

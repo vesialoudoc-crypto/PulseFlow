@@ -1,0 +1,15 @@
+# EF Core migrations — do not touch history
+**/Migrations/**
+
+# csproj — risky due to MSBuild whitespace sensitivity
+*.csproj
+*.props
+*.targets
+*.json
+*.xml
+
+# tests — excluded by request
+**/*Tests/**
+**/*.Tests/**
+**/*Test.cs
+**/*Tests.cs

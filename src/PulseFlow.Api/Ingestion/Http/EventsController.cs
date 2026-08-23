@@ -19,15 +19,12 @@ public sealed class EventsController : ControllerBase
     [ProducesResponseType(StatusCodes.Status202Accepted)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status415UnsupportedMediaType)]
     [ProducesResponseType<ProblemDetails>(StatusCodes.Status500InternalServerError)]
-    public async Task<IActionResult> IngestAsync(
-        CancellationToken cancellationToken)
+    public async Task<IActionResult> IngestAsync(CancellationToken ct)
     {
         await using var batchStream = new MemoryStream();
-        await Request.Body.CopyToAsync(batchStream, cancellationToken);
+        await Request.Body.CopyToAsync(batchStream, ct);
 
-        await _publisher.PublishAsync(
-            batchStream.ToArray(),
-            cancellationToken);
+        await _publisher.PublishAsync(batchStream.ToArray(), ct);
 
         return Accepted();
     }

@@ -10,7 +10,8 @@ public sealed class IngestionBatchDelivery
     internal IngestionBatchDelivery(
         ReadOnlyMemory<byte> body,
         Func<CancellationToken, Task> acknowledge,
-        Func<CancellationToken, Task> reject)
+        Func<CancellationToken, Task> reject
+    )
     {
         ArgumentNullException.ThrowIfNull(acknowledge);
         ArgumentNullException.ThrowIfNull(reject);
@@ -20,13 +21,13 @@ public sealed class IngestionBatchDelivery
         _reject = reject;
     }
 
-    public Task AcknowledgeAsync(CancellationToken cancellationToken)
+    public Task AcknowledgeAsync(CancellationToken ct)
     {
-        return _acknowledge(cancellationToken);
+        return _acknowledge(ct);
     }
 
-    public Task RejectAsync(CancellationToken cancellationToken)
+    public Task RejectAsync(CancellationToken ct)
     {
-        return _reject(cancellationToken);
+        return _reject(ct);
     }
 }

@@ -7,9 +7,7 @@ public sealed class PulseFlowDbContextFactory : IDesignTimeDbContextFactory<Puls
 {
     public PulseFlowDbContext CreateDbContext(string[] args)
     {
-        var options = new DbContextOptionsBuilder<PulseFlowDbContext>()
-            .UseNpgsql()
-            .Options;
+        var options = new DbContextOptionsBuilder<PulseFlowDbContext>().UseNpgsql().Options;
 
         return new PulseFlowDbContext(options);
     }

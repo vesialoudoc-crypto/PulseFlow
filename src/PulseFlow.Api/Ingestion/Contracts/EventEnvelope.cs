@@ -5,12 +5,17 @@ namespace PulseFlow.Api.Ingestion.Contracts;
 // Created only after Event Contract v2 validation.
 public sealed class EventEnvelope
 {
-    internal EventEnvelope(
-        Guid eventId,
-        string type,
-        string source,
-        DateTime occurredAt,
-        JsonElement payload)
+    public Guid EventId { get; }
+
+    public string Type { get; }
+
+    public string Source { get; }
+
+    public DateTime OccurredAt { get; }
+
+    public JsonElement Payload { get; }
+
+    internal EventEnvelope(Guid eventId, string type, string source, DateTime occurredAt, JsonElement payload)
     {
         if (string.IsNullOrEmpty(type))
         {
@@ -40,14 +45,4 @@ public sealed class EventEnvelope
         // Keep the payload valid after the input JsonDocument is disposed.
         Payload = payload.Clone();
     }
-
-    public Guid EventId { get; }
-
-    public string Type { get; }
-
-    public string Source { get; }
-
-    public DateTime OccurredAt { get; }
-
-    public JsonElement Payload { get; }
 }
