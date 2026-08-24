@@ -267,15 +267,17 @@ The first reproducible load-test harness is available at
 [`tests/performance/ingestion-baseline.js`](../tests/performance/ingestion-baseline.js). It uses a closed model
 with configurable VUs and duration, posts one valid Event Contract v2 NDJSON record
 per request, and checks for HTTP 202. It intentionally has no performance thresholds
-or measured result yet. Its local-run instructions require a high enough local
-rate-limit quota to prevent HTTP 429 from becoming the limiting factor. Stage 4
-remains in progress: no baseline has been recorded, no bottleneck has been identified,
-and no improvement has been evaluated.
+or measured target. The first three-run local baseline for `VUS=10` and `DURATION=30s`
+is recorded in [Ingestion Performance Baseline 001](performance/ingestion-baseline-001.md).
+Its local-run instructions require a high enough local rate-limit quota to prevent HTTP
+429 from becoming the limiting factor. Stage 4 remains in progress: no bottleneck has
+been identified, and no improvement has been evaluated.
 
 ### Do Not Decide in Advance
 
-The exact number of instances or target performance metrics before a baseline
-measurement exists. The load scenario and measured quota values remain Stage 4 work.
+The exact number of instances and target performance metrics remain undecided. This
+first local baseline alone is not sufficient evidence to select either. Expanded load
+scenarios and measured quota values remain Stage 4 work.
 
 ## Stage 5: Deployment to AWS
 
