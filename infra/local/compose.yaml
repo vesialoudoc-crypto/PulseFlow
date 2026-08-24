@@ -99,19 +99,30 @@ services:
       - --connection
       - Host=postgres;Port=5432;Database=pulseflow;Username=pulseflow;Password=pulseflow-local-password
 
+  haproxy:
+    # HAProxy is the only local ingress for the two API replicas.
+    image: haproxy:3.2.9-alpine
+    # Startup ordering only; HAProxy's own health checks decide whether a replica
+    # receives traffic after it has started.
+    depends_on:
+      - api-1
+      - api-2
+    ports:
+      # The single public endpoint. API containers intentionally have no direct
+      # host ports, so local clients exercise load balancing and failover.
+      - "5254:8080"
+    volumes:
+      # Keep the proxy policy versioned with the local stack and prevent the
+      # container from modifying the source configuration.
+      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+
+  # These are equivalent API replicas. Their distinct service names are HAProxy
+  # backend identities, making distribution and failover visible in proxy logs.
   api-1:
     <<: *api-defaults
-    # Temporary direct access for testing the first API container before HAProxy is added.
-    ports:
-      # Left side is the port on this computer; right side is the port inside the container.
-      - "5254:8080"
 
   api-2:
     <<: *api-defaults
-    # Temporary direct access for testing the second API container before HAProxy is added.
-    ports:
-      # A different host port makes it possible to reach this container separately.
-      - "5255:8080"
 
 volumes:
   # Named volumes are managed by Docker and preserve local state between container recreations.
