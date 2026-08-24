@@ -42,6 +42,29 @@ $livenessUri = 'http://localhost:5254/health/live'
 $livenessPollInterval = [TimeSpan]::FromSeconds(2)
 $rabbitMqMetricsUri = 'http://localhost:15692/metrics/detailed?family=queue_coarse_metrics'
 $rabbitMqMetricsPollIntervalSeconds = 2
+$downstreamCompletionTimeout = [TimeSpan]::FromMinutes(5)
+
+function Get-AcceptedRequestCountFromK6Summary {
+    param([string]$SummaryPath)
+
+    if (-not (Test-Path -LiteralPath $SummaryPath -PathType Leaf)) {
+        throw "Grafana k6 summary '$SummaryPath' was not created."
+    }
+
+    $summary = Get-Content -LiteralPath $SummaryPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    $statusCheck = $summary.root_group.checks.PSObject.Properties['status is 202'].Value
+
+    if ($null -eq $statusCheck -or $null -eq $statusCheck.passes) {
+        throw "Grafana k6 summary '$SummaryPath' does not contain the 'status is 202' check result."
+    }
+
+    $acceptedRequestCount = [long]$statusCheck.passes
+    if ($acceptedRequestCount -lt 0) {
+        throw "Grafana k6 summary '$SummaryPath' contains an invalid 'status is 202' pass count."
+    }
+
+    return $acceptedRequestCount
+}
 
 function Get-RabbitMqQueueMetricValue {
     param(
@@ -271,31 +294,56 @@ try {
             throw "Grafana k6 failed with exit code $k6ExitCode."
         }
 
-        # Wait for both queue gauges to reach zero before reading PostgreSQL: consumers acknowledge only after persistence completes.
-        Write-Host "Waiting for 'pulseflow.ingestion-batches' to drain..."
-        do {
+        $acceptedRequestCount = Get-AcceptedRequestCountFromK6Summary $summaryPath
+        Write-Host "Accepted HTTP 202 count from k6 summary: $acceptedRequestCount."
+
+        # An empty queue sample alone is not proof of completion: RabbitMQ metrics can briefly
+        # report 0/0 immediately after k6 exits. Confirm completion only when PostgreSQL reaches
+        # the number of requests that k6 verified as HTTP 202.
+        Write-Host "Waiting for 'pulseflow.ingestion-batches' processing to complete..."
+        $downstreamCompletionDeadline = [DateTime]::UtcNow.Add($downstreamCompletionTimeout)
+        $persistedRowCount = $null
+
+        while ($true) {
             $queueStatus = Get-RabbitMqQueueStatus
 
             if ($queueStatus.MessagesReady -ne 0 -or $queueStatus.MessagesUnacknowledged -ne 0) {
                 Write-Host "Queue backlog: ready=$($queueStatus.MessagesReady), unacknowledged=$($queueStatus.MessagesUnacknowledged)."
-                Start-Sleep -Seconds $rabbitMqMetricsPollIntervalSeconds
             }
-        }
-        while ($queueStatus.MessagesReady -ne 0 -or $queueStatus.MessagesUnacknowledged -ne 0)
+            else {
+                $persistedRowCount = & $dockerCommand.Source compose --project-name $composeProjectName exec -T postgres `
+                    psql -U pulseflow -d pulseflow -tAc 'SELECT COUNT(*) FROM events;'
+                if ($LASTEXITCODE -ne 0) {
+                    throw 'Failed to query the persisted event count from PostgreSQL.'
+                }
 
-        $persistedRowCount = & $dockerCommand.Source compose --project-name $composeProjectName exec -T postgres `
-            psql -U pulseflow -d pulseflow -tAc 'SELECT COUNT(*) FROM events;'
-        if ($LASTEXITCODE -ne 0) {
-            throw 'Failed to query the persisted event count from PostgreSQL.'
+                $persistedRowCount = [long]$persistedRowCount.Trim()
+                Write-Host "Queue is empty; persisted rows=$persistedRowCount, accepted HTTP 202=$acceptedRequestCount."
+
+                if ($persistedRowCount -eq $acceptedRequestCount) {
+                    break
+                }
+            }
+
+            if ([DateTime]::UtcNow -ge $downstreamCompletionDeadline) {
+                break
+            }
+
+            Start-Sleep -Seconds $rabbitMqMetricsPollIntervalSeconds
         }
 
         $databaseCheckCapturedAtUtc = [DateTime]::UtcNow
         @(
-            "Persisted row count: $($persistedRowCount.Trim())"
+            "Accepted HTTP 202 count: $acceptedRequestCount"
+            "Persisted row count: $persistedRowCount"
             "Final DB check captured at (UTC): $($databaseCheckCapturedAtUtc.ToString('O'))"
         ) | Set-Content -LiteralPath $databasePath -Encoding utf8 -ErrorAction Stop
 
         Write-Host "Saved database result to '$databasePath'."
+
+        if ($persistedRowCount -ne $acceptedRequestCount) {
+            throw "Downstream processing was not confirmed within $($downstreamCompletionTimeout.TotalMinutes) minutes: persisted row count $persistedRowCount does not match accepted HTTP 202 count $acceptedRequestCount."
+        }
     }
     finally {
         Stop-Job -Job $containerMetricsSampler -ErrorAction SilentlyContinue
