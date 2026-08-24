@@ -1,2 +1,4 @@
+# This root file keeps Docker commands simple: run them from the repository root.
+# The actual local development containers are defined in the included file.
 include:
   - ./infra/local/compose.yaml
