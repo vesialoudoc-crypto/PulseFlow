@@ -274,11 +274,11 @@ publisher-channel pool and performance-runner correctness changes; its 30-VU res
 therefore does not represent the current configuration.
 
 [Ingestion Performance Baseline 002](performance/ingestion-baseline-002.md) records
-the post-fix `10 VU / 10s`, `20 VU / 10s`, and `30 VU / 10s` sweep for one API
-instance, `RabbitMq:ConsumerCount = 1`, `RabbitMq:PublisherChannelCount = 4`, and
-`Ingestion:ChunkCapacity = 100`. The corrected runner now verifies completion by
+the final fresh post-fix `10 VU / 10s`, `20 VU / 10s`, and `30 VU / 10s` sweep for
+one API instance, `RabbitMq:ConsumerCount = 1`, `RabbitMq:PublisherChannelCount = 4`,
+and `Ingestion:ChunkCapacity = 100`. The corrected runner verifies completion by
 requiring PostgreSQL's persisted event count to equal the k6 HTTP-202 acceptance
-count after the queue is empty. All Baseline 002 rows meet that invariant. Its
+count after the queue is empty. Every Baseline 002 row meets that invariant. Its
 local-run instructions require a high enough local rate-limit quota to prevent HTTP
 429 from becoming the limiting factor. Stage 4 remains in progress, and no
 bottleneck conclusion, target, or optimization decision has been made.

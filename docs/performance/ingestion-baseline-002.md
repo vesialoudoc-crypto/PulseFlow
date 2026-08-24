@@ -4,18 +4,21 @@
 
 ## Purpose
 
-Baseline 002 is the post-fix local load sweep. It supersedes neither the historical
-measurements nor the provenance of [Baseline 001](ingestion-baseline-001.md): Baseline
-001 remains the pre-fix record at commit `ad1da229afeb36dbdf17e7a18d780196a137abd6`.
+Baseline 002 is a fresh post-fix local load sweep. It does not supersede
+[Baseline 001](ingestion-baseline-001.md), which remains the historical pre-fix
+record at commit `ad1da229afeb36dbdf17e7a18d780196a137abd6`.
 
-This baseline measures the branch at commit `dbee46ca53f95f5752384933ba960a3554f2a277`,
-which includes the RabbitMQ publisher channel pool and the corrected performance-runner
-completion verification.
+The three rows below come only from the fresh runs captured in these artifact
+directories:
+
+- `tests/performance/results/20260824-182935-412` (10 VU)
+- `tests/performance/results/20260824-183201-938` (20 VU)
+- `tests/performance/results/20260824-183400-633` (30 VU)
 
 ## Scenario and configuration
 
 The local runner used its isolated `pulseflow-performance` Compose stack. Each run
-started with fresh volumes and removed the stack and volumes after the artifacts were
+started with fresh volumes and removed the stack and volumes after artifacts were
 captured. The closed-model k6 scenario continuously sent one valid Event Contract v2
 NDJSON record per request to `POST /api/events` and checked for HTTP 202.
 
@@ -25,51 +28,45 @@ NDJSON record per request to `POST /api/events` and checked for HTTP 202.
 - `Ingestion:ChunkCapacity`: 100.
 - VU sweep: 10, 20, and 30.
 - Duration: 10 seconds at every load level.
+- Same current code and configuration were used for all three runs.
 - Redis local rate-limit quota: 10,000,000 requests per `00:01:00` fixed window.
 
-The valid 10-VU and 20-VU artifacts were created for this sweep. The existing valid
-30-VU artifact was reused rather than rerun. Its `database.txt` records 30 accepted
-HTTP 202 responses and 30 persisted PostgreSQL rows. During its completion phase, the
-runner initially observed an empty queue and zero persisted rows, waited, and then
-observed 30 persisted rows.
-
-After k6 exits, the corrected runner obtains the accepted HTTP 202 count from the k6
-summary. It treats downstream completion as confirmed only when the ingestion queue is
-empty and PostgreSQL's persisted event count equals that accepted count. A mismatch
-fails the run. Therefore, every row below satisfies:
+After k6 exits, the runner gets the accepted HTTP 202 count from the k6 summary. It
+confirms downstream completion only when the ingestion queue is empty and PostgreSQL's
+persisted event count equals that accepted count. A mismatch fails the run. Every row
+below therefore satisfies:
 
 ```text
 accepted HTTP 202 count == final PostgreSQL persisted row count
 ```
 
-All latency values are milliseconds. Queue and container values are two-second samples,
-so their peaks and drain times are sampled approximations. Approximate drain time is
-from the sample with the peak total backlog to the first later zero-backlog sample.
+All latency values are milliseconds. RabbitMQ and container-resource values are
+two-second samples, so their peaks and drain times are sampled approximations.
+Approximate drain time is from the sample with peak total backlog to the first later
+zero-backlog sample.
 
 ## Load-sweep results
 
-| Load level | Run artifact directory | Total HTTP requests | Requests/sec | Avg | p90 | p95 | Max | HTTP failures | Failed 202 checks | Accepted HTTP 202 | Peak ready | Peak unacknowledged | Peak total backlog | Approximate drain time | Final PostgreSQL persisted row count |
-| --- | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | --- | ---: |
-| 10 VU / 10s | `tests/performance/results/20260824-172741-703` | 27,898 | 2,789.01 | 3.48 | 4.27 | 5.23 | 164.02 | 0.00% (0) | 0 | 27,898 | 0 | 25,700 | 25,700 | 93.0 s | 27,898 |
-| 20 VU / 10s | `tests/performance/results/20260824-172538-229` | 21,813 | 2,179.99 | 9.06 | 9.00 | 10.54 | 2,128.28 | 0.00% (0) | 0 | 21,813 | 0 | 19,667 | 19,667 | 68.8 s | 21,813 |
-| 30 VU / 10s (reused) | `tests/performance/results/20260824-172255-297` | 30 | 2.28 | 13,158.93 | 13,159.15 | 13,159.15 | 13,159.66 | 0.00% (0) | 0 | 30 | 0 | 0 | 0 | Not observable; every backlog sample was zero | 30 |
+| VU | Requests | Requests/sec | Avg latency | p90 | p95 | Max | HTTP failures | Failed 202 checks | Accepted HTTP 202 | Persisted PostgreSQL rows | Peak ready | Peak unacknowledged | Peak total backlog | Approximate drain time |
+| ---: | ---: | ---: | ---: | ---: | ---: | ---: | --- | ---: | ---: | ---: | ---: | ---: | ---: | --- |
+| 10 | 28,783 | 2,877.18 | 3.38 ms | 4.23 ms | 5.00 ms | 160.90 ms | 0.00% | 0 | 28,783 | 28,783 | 0 | 26,611 | 26,611 | 95.0 s |
+| 20 | 21,505 | 2,149.25 | 9.19 ms | 8.31 ms | 9.82 ms | 2,690.25 ms | 0.00% | 0 | 21,505 | 21,505 | 0 | 19,271 | 19,271 | 68.8 s |
+| 30 | 28,105 | 2,808.26 | 10.57 ms | 12.74 ms | 14.79 ms | 223.05 ms | 0.00% | 0 | 28,105 | 28,105 | 0 | 25,926 | 25,926 | 93.0 s |
 
 ## Sampled container-resource peaks
 
 Each cell is sampled peak CPU / sampled peak memory from `containers.csv`.
 
-| Load level | API | RabbitMQ | Redis | PostgreSQL |
-| --- | --- | --- | --- | --- |
-| 10 VU / 10s | 444.23% / 172.81 MB | 423.83% / 362.91 MB | 21.75% / 8.09 MB | 14.85% / 54.22 MB |
-| 20 VU / 10s | 384.21% / 164.31 MB | 290.02% / 336.17 MB | 21.51% / 8.38 MB | 15.29% / 52.21 MB |
-| 30 VU / 10s (reused) | 74.77% / 68.18 MB | 328.42% / 211.39 MB | 2.11% / 13.68 MB | 7.74% / 70.64 MB |
+| VU | API peak CPU / memory | RabbitMQ peak CPU / memory | Redis peak CPU / memory | PostgreSQL peak CPU / memory |
+| ---: | --- | --- | --- | --- |
+| 10 | 369.84% / 174.06 MB | 356.59% / 414.61 MB | 21.37% / 11.51 MB | 14.49% / 82.98 MB |
+| 20 | 440.94% / 163.79 MB | 284.29% / 322.86 MB | 22.40% / 8.31 MB | 14.68% / 52.19 MB |
+| 30 | 436.09% / 177.42 MB | 418.58% / 382.21 MB | 21.24% / 8.56 MB | 15.93% / 54.81 MB |
 
 ## Result and limits
 
-All included runs completed successfully with zero HTTP failures, zero failed HTTP 202
-checks, and equal accepted-HTTP-202 and final-persisted-row counts. The result verifies
-the corrected runner's completion criterion for this local configuration; it does not
-establish a target, SLO, delivery guarantee, or root cause for the differing HTTP
-acceptance rates. The 30-VU reused run has only 30 completed requests with long
-latency and no sampled backlog, so it remains a measured observation rather than a
-bottleneck conclusion or a reason to optimize.
+All three fresh runs completed successfully with zero HTTP failures, zero failed
+HTTP-202 checks, and equal accepted-HTTP-202 and final-persisted-row counts. This
+baseline verifies the corrected runner's completion criterion for this local
+configuration. It does not establish a target, SLO, delivery guarantee, or a
+bottleneck conclusion.
