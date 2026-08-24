@@ -109,6 +109,8 @@ Write-Output $resultDirectory
 $livenessPollInterval = [TimeSpan]::FromSeconds(2)
 $rabbitMqMetricsPollIntervalSeconds = 2
 $downstreamCompletionTimeout = [TimeSpan]::FromMinutes(5)
+$warmUpSource = 'performance-runner-warm-up'
+$redisLimiterKey = 'pulseflow:rate-limit:ingestion:global'
 
 function Get-AcceptedRequestCountFromK6Summary {
     param([string]$SummaryPath)
@@ -143,9 +145,12 @@ function Get-RequiredNonNegativeDouble {
     }
 
     try {
+        $invariantCulture = [Globalization.CultureInfo]::InvariantCulture
+        $numericText = [Convert]::ToString($Value, $invariantCulture)
         $numericValue = [double]::Parse(
-            $Value.ToString(),
-            [Globalization.CultureInfo]::InvariantCulture
+            $numericText,
+            [Globalization.NumberStyles]::Float,
+            $invariantCulture
         )
     }
     catch {
@@ -391,6 +396,21 @@ function Get-RabbitMqQueueStatus {
     }
 }
 
+function Invoke-PostgresScalar {
+    param(
+        [string]$Query,
+        [string]$FailureMessage
+    )
+
+    $queryOutput = & $dockerCommand.Source compose @composeFileArguments --project-name $composeProjectName exec -T postgres `
+        psql -U pulseflow -d pulseflow -tAc $Query
+    if ($LASTEXITCODE -ne 0) {
+        throw $FailureMessage
+    }
+
+    return ($queryOutput | Out-String).Trim()
+}
+
 # Reset this dedicated Compose project so each measurement begins without state from a previous run.
 Write-Host "Removing the previous '$composeProjectName' Compose stack and its volumes..."
 & $dockerCommand.Source compose @composeFileArguments --project-name $composeProjectName down --volumes --remove-orphans
@@ -435,6 +455,124 @@ try {
 
         Start-Sleep -Seconds $livenessPollInterval.TotalSeconds
     }
+
+    # Exercise every ingestion dependency once before measurement. The request is sent
+    # only once; readiness is established by polling its downstream effects.
+    $warmUpEventId = [Guid]::NewGuid().ToString('D')
+    $warmUpEvent = [ordered]@{
+        eventId = $warmUpEventId
+        type = 'ingestion.performance-warm-up'
+        source = $warmUpSource
+        occurredAt = [DateTime]::UtcNow.ToString('O')
+        payload = [ordered]@{
+            scenario = 'performance-runner-warm-up'
+        }
+    }
+    $warmUpBody = ($warmUpEvent | ConvertTo-Json -Compress -Depth 3) + "`n"
+    $warmUpUri = "$($env:BASE_URL)/api/events"
+
+    Write-Host "Sending one ingestion warm-up event '$warmUpEventId' through topology '$Topology'..."
+    $warmUpResponse = Invoke-WebRequest `
+        -Uri $warmUpUri `
+        -Method Post `
+        -ContentType 'application/x-ndjson' `
+        -Body $warmUpBody `
+        -SkipHttpErrorCheck
+    if ($warmUpResponse.StatusCode -ne 202) {
+        throw "The ingestion warm-up returned HTTP $($warmUpResponse.StatusCode); expected HTTP 202."
+    }
+
+    Write-Host 'Warm-up ingestion returned HTTP 202.'
+
+    $warmUpPredicate = "source = '$warmUpSource' AND event_id = '$warmUpEventId'::uuid"
+    $warmUpDeadline = [DateTime]::UtcNow.Add($downstreamCompletionTimeout)
+    while ($true) {
+        $warmUpRowCount = [long](Invoke-PostgresScalar `
+                -Query "SELECT COUNT(*) FROM events WHERE $warmUpPredicate;" `
+                -FailureMessage 'Failed to query the warm-up event in PostgreSQL.')
+
+        if ($warmUpRowCount -eq 1) {
+            Write-Host "Warm-up event '$warmUpEventId' reached PostgreSQL."
+            break
+        }
+
+        if ($warmUpRowCount -gt 1) {
+            throw "PostgreSQL contains $warmUpRowCount rows for warm-up event '$warmUpEventId'; expected exactly one."
+        }
+
+        if ([DateTime]::UtcNow -ge $warmUpDeadline) {
+            throw "Warm-up event '$warmUpEventId' did not reach PostgreSQL within $($downstreamCompletionTimeout.TotalMinutes) minutes."
+        }
+
+        Start-Sleep -Seconds $rabbitMqMetricsPollIntervalSeconds
+    }
+
+    while ($true) {
+        $warmUpQueueStatus = Get-RabbitMqQueueStatus
+        if ($warmUpQueueStatus.MessagesReady -eq 0 -and $warmUpQueueStatus.MessagesUnacknowledged -eq 0) {
+            Write-Host 'RabbitMQ warm-up queue drained: ready=0, unacknowledged=0.'
+            break
+        }
+
+        Write-Host "Waiting for warm-up queue drain: ready=$($warmUpQueueStatus.MessagesReady), unacknowledged=$($warmUpQueueStatus.MessagesUnacknowledged)."
+        if ([DateTime]::UtcNow -ge $warmUpDeadline) {
+            throw "RabbitMQ warm-up queue did not drain within $($downstreamCompletionTimeout.TotalMinutes) minutes."
+        }
+
+        Start-Sleep -Seconds $rabbitMqMetricsPollIntervalSeconds
+    }
+
+    $deletedWarmUpRowCount = [long](Invoke-PostgresScalar `
+            -Query "WITH deleted AS (DELETE FROM events WHERE $warmUpPredicate RETURNING 1) SELECT COUNT(*) FROM deleted;" `
+            -FailureMessage 'Failed to delete the warm-up event from PostgreSQL.')
+    if ($deletedWarmUpRowCount -ne 1) {
+        throw "Deleted $deletedWarmUpRowCount PostgreSQL rows for warm-up event '$warmUpEventId'; expected exactly one."
+    }
+
+    Write-Host "Deleted only warm-up event '$warmUpEventId' from PostgreSQL."
+
+    $redisDeleteOutput = & $dockerCommand.Source compose @composeFileArguments --project-name $composeProjectName exec -T redis `
+        redis-cli --raw DEL $redisLimiterKey
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to delete Redis limiter key '$redisLimiterKey'."
+    }
+
+    $redisDeletedKeyCount = [long](($redisDeleteOutput | Out-String).Trim())
+    if ($redisDeletedKeyCount -ne 1) {
+        throw "Redis deleted $redisDeletedKeyCount keys for '$redisLimiterKey'; expected exactly one."
+    }
+
+    $redisExistsOutput = & $dockerCommand.Source compose @composeFileArguments --project-name $composeProjectName exec -T redis `
+        redis-cli --raw EXISTS $redisLimiterKey
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to verify Redis limiter key '$redisLimiterKey'."
+    }
+
+    $redisKeyExists = [long](($redisExistsOutput | Out-String).Trim())
+    if ($redisKeyExists -ne 0) {
+        throw "Redis limiter key '$redisLimiterKey' still exists after deletion."
+    }
+
+    Write-Host "Deleted Redis limiter key '$redisLimiterKey' and verified it is absent."
+
+    $preMeasurementRowCount = [long](Invoke-PostgresScalar `
+            -Query 'SELECT COUNT(*) FROM events;' `
+            -FailureMessage 'Failed to verify the pre-measurement PostgreSQL event count.')
+    if ($preMeasurementRowCount -ne 0) {
+        throw "PostgreSQL contains $preMeasurementRowCount events immediately before measurement; expected zero."
+    }
+
+    Write-Host 'Pre-k6 PostgreSQL events count: 0.'
+
+    $preMeasurementQueueStatus = Get-RabbitMqQueueStatus
+    if (
+        $preMeasurementQueueStatus.MessagesReady -ne 0 -or
+        $preMeasurementQueueStatus.MessagesUnacknowledged -ne 0
+    ) {
+        throw "RabbitMQ queue is not empty immediately before measurement: ready=$($preMeasurementQueueStatus.MessagesReady), unacknowledged=$($preMeasurementQueueStatus.MessagesUnacknowledged)."
+    }
+
+    Write-Host 'Pre-k6 RabbitMQ queue: ready=0, unacknowledged=0.'
 
     # Run the fixed baseline scenario and preserve its summary so the observed result can be reviewed later.
     $scenarioPath = Join-Path $PSScriptRoot 'ingestion-baseline.js'
@@ -649,13 +787,17 @@ try {
         }
     }
     finally {
-        Stop-Job -Job $containerMetricsSampler -ErrorAction SilentlyContinue
-        Wait-Job -Job $containerMetricsSampler -ErrorAction SilentlyContinue | Out-Null
-        Remove-Job -Job $containerMetricsSampler -Force -ErrorAction SilentlyContinue
+        if ($null -ne $containerMetricsSampler) {
+            Stop-Job -Job $containerMetricsSampler -ErrorAction SilentlyContinue
+            Wait-Job -Job $containerMetricsSampler -ErrorAction SilentlyContinue | Out-Null
+            Remove-Job -Job $containerMetricsSampler -Force -ErrorAction SilentlyContinue
+        }
 
-        Stop-Job -Job $rabbitMqMetricsSampler -ErrorAction SilentlyContinue
-        Wait-Job -Job $rabbitMqMetricsSampler -ErrorAction SilentlyContinue | Out-Null
-        Remove-Job -Job $rabbitMqMetricsSampler -Force -ErrorAction SilentlyContinue
+        if ($null -ne $rabbitMqMetricsSampler) {
+            Stop-Job -Job $rabbitMqMetricsSampler -ErrorAction SilentlyContinue
+            Wait-Job -Job $rabbitMqMetricsSampler -ErrorAction SilentlyContinue | Out-Null
+            Remove-Job -Job $rabbitMqMetricsSampler -Force -ErrorAction SilentlyContinue
+        }
     }
 
     Write-Host "Saved k6 summary to '$summaryPath'."

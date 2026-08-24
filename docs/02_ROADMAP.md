@@ -263,6 +263,14 @@ to whole delta seconds; an unavailable result returns HTTP 503. Focused HTTP tes
 verify these mappings, confirm that rejected requests do not call the publisher, and
 confirm that an allowed request is published and returns HTTP 202.
 
+Two explicit local measurement topologies are accepted. Single remains the direct
+`client -> api` control. Multi uses HAProxy as its only public HTTP entry point and
+routes round-robin across healthy internal `api-1` and `api-2` replicas; both API
+processes also host one RabbitMQ consumer when `RabbitMq:ConsumerCount = 1`. Both
+topologies share PostgreSQL, RabbitMQ, and Redis. This local choice does not select
+the future cloud/AWS ingress. See
+[ADR 0015](decisions/0015-use-haproxy-for-local-multi-instance-api-ingress.md).
+
 The reproducible load-test harness is available at
 [`tests/performance/ingestion-baseline.js`](../tests/performance/ingestion-baseline.js). It uses a closed model
 with configurable VUs and duration, posts one valid Event Contract v2 NDJSON record
@@ -282,6 +290,16 @@ count after the queue is empty. Every Baseline 002 row meets that invariant. Its
 local-run instructions require a high enough local rate-limit quota to prevent HTTP
 429 from becoming the limiting factor. Stage 4 remains in progress, and no
 bottleneck conclusion, target, or optimization decision has been made.
+
+Before starting performance samplers or k6, the runner prepares the complete
+ingestion path with exactly one uniquely identified event through the selected
+topology ingress. It requires HTTP 202, observes that event in PostgreSQL, waits for
+the RabbitMQ main queue to drain, then deletes only the warm-up row and the global
+Redis limiter key. A final zero-row PostgreSQL check and zero-ready/zero-unacknowledged
+RabbitMQ check keep all warm-up work outside the fixed 10-second baseline. Liveness
+alone is not measurement readiness for this baseline, and arbitrary fixed sleeps are
+not accepted as readiness criteria. See
+[ADR 0016](decisions/0016-warm-full-ingestion-path-before-performance-baseline.md).
 
 ### Do Not Decide in Advance
 

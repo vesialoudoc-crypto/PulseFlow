@@ -68,9 +68,12 @@ Results:
 
 ## Decisions made
 
-No product or architectural decision changed. This is a local reproducibility and
-measurement-harness configuration refactor; it does not create a new performance
-baseline or alter application, Redis limiter, or RabbitMQ behavior.
+The accepted local topology is recorded in
+[ADR 0015](../decisions/0015-use-haproxy-for-local-multi-instance-api-ingress.md):
+Single remains the direct reproducible control, while HAProxy is the only public HTTP
+entry point for Multi and distributes requests across the two internal API replicas.
+This does not create a new performance baseline or alter application, Redis limiter,
+or RabbitMQ behavior.
 
 ## Intentionally unresolved
 

@@ -17,8 +17,10 @@ pwsh .\tests\performance\run.ps1 -Topology Multi
 ```
 
 `Single` targets one `api` service. `Multi` targets HAProxy and its `api-1` and
-`api-2` backends. The runner never guesses a topology. To verify the selected Compose
-service set without requiring or running k6, use:
+`api-2` backends. This accepted local topology is documented in
+[ADR 0015](../../docs/decisions/0015-use-haproxy-for-local-multi-instance-api-ingress.md).
+The runner never guesses a topology. To verify the selected Compose service set
+without requiring or running k6, use:
 
 ```powershell
 pwsh .\tests\performance\run.ps1 -Topology Single -ValidateTopology
@@ -44,15 +46,24 @@ For every run, the runner:
    load scenario. It also uses RabbitMQ metrics ports `15693` and `15694`,
    respectively. This avoids conflicts with the normal local stack's `5254` and
    `15692` ports.
-3. Starts RabbitMQ backlog and container-resource sampling, then runs
+3. Sends exactly one valid warm-up event through the selected ingress and waits for
+   that event to reach PostgreSQL and for the RabbitMQ ingestion queue to drain. It
+   then deletes only that event and the Redis key
+   `pulseflow:rate-limit:ingestion:global`, and verifies that PostgreSQL and the queue
+   are empty.
+4. Starts RabbitMQ backlog and container-resource sampling, then runs
    `ingestion-baseline.js` with k6 and saves the k6 summary.
-4. Waits for the RabbitMQ ingestion queue to drain, then reads the final persisted
+5. Waits for the RabbitMQ ingestion queue to drain, then reads the final persisted
    row count from PostgreSQL.
-5. Removes the selected isolated performance Compose stack and its volumes when the
+6. Removes the selected isolated performance Compose stack and its volumes when the
    run ends, including when startup or k6 fails after the stack has been started.
 
 The local Compose configuration keeps the Redis limiter enabled with a local-only
 quota high enough that HTTP 429 is not expected to limit the default scenario.
+The warm-up is outside k6 and finishes before performance sampling starts, so its HTTP
+request, PostgreSQL row, Redis quota use, and RabbitMQ activity are excluded from the
+measured baseline. The measurement-readiness decision is documented in
+[ADR 0016](../../docs/decisions/0016-warm-full-ingestion-path-before-performance-baseline.md).
 
 ## Result artifacts
 
