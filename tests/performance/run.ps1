@@ -237,7 +237,7 @@ function Get-CurrentRunPerformanceReport {
     }
 
     $resourcePeaks = @{}
-    foreach ($service in @('api', 'rabbitmq', 'redis', 'postgres')) {
+    foreach ($service in @('haproxy', 'api-1', 'api-2', 'rabbitmq', 'redis', 'postgres')) {
         $serviceRows = @($containerRows | Where-Object { $_.service -eq $service })
         if ($serviceRows.Count -eq 0) {
             throw "Container samples '$ContainerCsvPath' do not contain measurements for service '$service'."
@@ -287,8 +287,12 @@ function Get-CurrentRunPerformanceReport {
     Write-Host "Approximate drain time: $($drainTimeSeconds.ToString('F1', $culture)) s"
     Write-Host ''
     Write-Host 'Resources:'
-    Write-Host "API peak CPU: $($resourcePeaks['api'].Cpu.ToString('F2', $culture)) %"
-    Write-Host "API peak memory: $($resourcePeaks['api'].Memory.ToString('F2', $culture)) MB"
+    Write-Host "HAProxy peak CPU: $($resourcePeaks['haproxy'].Cpu.ToString('F2', $culture)) %"
+    Write-Host "HAProxy peak memory: $($resourcePeaks['haproxy'].Memory.ToString('F2', $culture)) MB"
+    Write-Host "API 1 peak CPU: $($resourcePeaks['api-1'].Cpu.ToString('F2', $culture)) %"
+    Write-Host "API 1 peak memory: $($resourcePeaks['api-1'].Memory.ToString('F2', $culture)) MB"
+    Write-Host "API 2 peak CPU: $($resourcePeaks['api-2'].Cpu.ToString('F2', $culture)) %"
+    Write-Host "API 2 peak memory: $($resourcePeaks['api-2'].Memory.ToString('F2', $culture)) MB"
     Write-Host "RabbitMQ peak CPU: $($resourcePeaks['rabbitmq'].Cpu.ToString('F2', $culture)) %"
     Write-Host "RabbitMQ peak memory: $($resourcePeaks['rabbitmq'].Memory.ToString('F2', $culture)) MB"
     Write-Host "Redis peak CPU: $($resourcePeaks['redis'].Cpu.ToString('F2', $culture)) %"
@@ -444,7 +448,7 @@ try {
         }
 
         $serviceContainerIds = @{}
-        foreach ($service in @('api', 'rabbitmq', 'redis', 'postgres')) {
+        foreach ($service in @('haproxy', 'api-1', 'api-2', 'rabbitmq', 'redis', 'postgres')) {
             $containerId = & $dockerCommand.Source compose --project-name $composeProjectName ps -q $service
             if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($containerId)) {
                 throw "Failed to find the running container for Compose service '$service'."
@@ -491,7 +495,7 @@ try {
             $containerIds = @($ServiceContainerIds.Values)
             $statsOutput = & $DockerCommandPath stats --no-stream --format '{{.Container}}|{{.CPUPerc}}|{{.MemUsage}}' $containerIds 2>$null
             $statsExitCode = $LASTEXITCODE
-            $rows = foreach ($service in @('api', 'rabbitmq', 'redis', 'postgres')) {
+            $rows = foreach ($service in @('haproxy', 'api-1', 'api-2', 'rabbitmq', 'redis', 'postgres')) {
                 $cpuPercent = $null
                 $memoryUsageMb = $null
                 $containerIdPrefix = $ServiceContainerIds[$service].Substring(0, [Math]::Min(12, $ServiceContainerIds[$service].Length))
