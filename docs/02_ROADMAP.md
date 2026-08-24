@@ -263,20 +263,25 @@ to whole delta seconds; an unavailable result returns HTTP 503. Focused HTTP tes
 verify these mappings, confirm that rejected requests do not call the publisher, and
 confirm that an allowed request is published and returns HTTP 202.
 
-The first reproducible load-test harness is available at
+The reproducible load-test harness is available at
 [`tests/performance/ingestion-baseline.js`](../tests/performance/ingestion-baseline.js). It uses a closed model
 with configurable VUs and duration, posts one valid Event Contract v2 NDJSON record
 per request, and checks for HTTP 202. It intentionally has no performance thresholds
-or measured target. The first local baseline is a three-level load sweep of `10 VU /
-10s`, `20 VU / 10s`, and `30 VU / 10s`, recorded in [Ingestion Performance Baseline
-001](performance/ingestion-baseline-001.md). Its local-run instructions require a high
-enough local rate-limit quota to prevent HTTP 429 from becoming the limiting factor.
-The 30-VU observation requires focused investigation before it can be treated as a
-bottleneck finding. Stage 4 remains in progress, and no improvement has been
-evaluated. The recorded Baseline 001 measurements were taken at repository commit
-`ad1da229afeb36dbdf17e7a18d780196a137abd6`; they predate the later RabbitMQ
-publisher-channel-pool and performance-runner correctness changes, so those changes
-are not represented by the baseline results.
+or measured target. [Ingestion Performance Baseline 001](performance/ingestion-baseline-001.md)
+is retained unchanged as the historical pre-fix three-level local sweep at commit
+`ad1da229afeb36dbdf17e7a18d780196a137abd6`. It predates the RabbitMQ
+publisher-channel pool and performance-runner correctness changes; its 30-VU result
+therefore does not represent the current configuration.
+
+[Ingestion Performance Baseline 002](performance/ingestion-baseline-002.md) records
+the post-fix `10 VU / 10s`, `20 VU / 10s`, and `30 VU / 10s` sweep for one API
+instance, `RabbitMq:ConsumerCount = 1`, `RabbitMq:PublisherChannelCount = 4`, and
+`Ingestion:ChunkCapacity = 100`. The corrected runner now verifies completion by
+requiring PostgreSQL's persisted event count to equal the k6 HTTP-202 acceptance
+count after the queue is empty. All Baseline 002 rows meet that invariant. Its
+local-run instructions require a high enough local rate-limit quota to prevent HTTP
+429 from becoming the limiting factor. Stage 4 remains in progress, and no
+bottleneck conclusion, target, or optimization decision has been made.
 
 ### Do Not Decide in Advance
 
