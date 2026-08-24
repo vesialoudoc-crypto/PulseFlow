@@ -1,0 +1,10 @@
+.git
+.github
+.vs
+docs
+load
+scripts
+tests
+
+**/bin
+**/obj
