@@ -20,6 +20,8 @@ services:
       RABBITMQ_DEFAULT_PASS: pulseflow-local-password
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
+    ports:
+      - "15692:15692"
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 5s

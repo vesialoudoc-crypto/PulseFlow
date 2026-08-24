@@ -40,6 +40,8 @@ Write-Output $resultDirectory
 $composeProjectName = 'pulseflow-performance'
 $livenessUri = 'http://localhost:5254/health/live'
 $livenessPollInterval = [TimeSpan]::FromSeconds(2)
+$rabbitMqMetricsUri = 'http://localhost:15692/metrics/detailed?family=queue_coarse_metrics'
+$rabbitMqMetricsPollIntervalSeconds = 2
 
 # Reset this dedicated Compose project so each measurement begins without state from a previous run.
 Write-Host "Removing the previous '$composeProjectName' Compose stack and its volumes..."
@@ -89,11 +91,77 @@ try {
     # Run the fixed baseline scenario and preserve its summary so the observed result can be reviewed later.
     $scenarioPath = Join-Path $PSScriptRoot 'ingestion-baseline.js'
     $summaryPath = Join-Path $resultDirectory 'k6-summary.json'
+    $rabbitMqCsvPath = Join-Path $resultDirectory 'rabbitmq.csv'
+
+    'timestamp_utc,messages_ready,messages_unacknowledged,messages_total' |
+        Set-Content -LiteralPath $rabbitMqCsvPath -Encoding utf8 -ErrorAction Stop
+
+    # Sample RabbitMQ in a background job so k6 retains its existing console output.
+    # Persist only the configured queue's backlog gauges, not complete Prometheus responses.
+    $rabbitMqMetricsSampler = Start-Job -ArgumentList $rabbitMqMetricsUri, $rabbitMqCsvPath, $rabbitMqMetricsPollIntervalSeconds -ScriptBlock {
+        param(
+            [string]$MetricsUri,
+            [string]$CsvPath,
+            [int]$PollIntervalSeconds
+        )
+
+        function Get-QueueMetricValue {
+            param(
+                [string[]]$MetricLines,
+                [string]$MetricName
+            )
+
+            $metricPattern =
+                '^' + [regex]::Escape($MetricName) + '\{[^}]*queue="pulseflow\.ingestion-batches"[^}]*\}\s+(.+)$'
+            $metricLine = $MetricLines |
+                Where-Object {
+                    $_ -match $metricPattern
+                } |
+                Select-Object -First 1
+
+            if ($null -eq $metricLine) {
+                return $null
+            }
+
+            return ($metricLine -split '\s+')[-1]
+        }
+
+        while ($true) {
+            $capturedAtUtc = [DateTime]::UtcNow
+
+            try {
+                $response = Invoke-WebRequest -Uri $MetricsUri -Method Get -ErrorAction Stop
+                $metricLines = $response.Content -split "`r?`n"
+                $messagesReady = Get-QueueMetricValue $metricLines 'rabbitmq_detailed_queue_messages_ready'
+                $messagesUnacknowledged = Get-QueueMetricValue $metricLines 'rabbitmq_detailed_queue_messages_unacked'
+                $messagesTotal = Get-QueueMetricValue $metricLines 'rabbitmq_detailed_queue_messages'
+
+                "$($capturedAtUtc.ToString('O')),$messagesReady,$messagesUnacknowledged,$messagesTotal" |
+                    Add-Content -LiteralPath $CsvPath -Encoding utf8 -ErrorAction Stop
+            }
+            catch {
+                Write-Warning "Unable to sample RabbitMQ metrics: $($_.Exception.Message)"
+            }
+
+            Start-Sleep -Seconds $PollIntervalSeconds
+        }
+    }
 
     Write-Host "Running k6 scenario '$scenarioPath'..."
-    & $k6Command.Source run "--summary-export=$summaryPath" $scenarioPath
-    if ($LASTEXITCODE -ne 0) {
-        throw "Grafana k6 failed with exit code $LASTEXITCODE."
+    $k6ExitCode = $null
+
+    try {
+        & $k6Command.Source run "--summary-export=$summaryPath" $scenarioPath
+        $k6ExitCode = $LASTEXITCODE
+    }
+    finally {
+        Stop-Job -Job $rabbitMqMetricsSampler -ErrorAction SilentlyContinue
+        Wait-Job -Job $rabbitMqMetricsSampler | Out-Null
+        Remove-Job -Job $rabbitMqMetricsSampler -Force
+    }
+
+    if ($k6ExitCode -ne 0) {
+        throw "Grafana k6 failed with exit code $k6ExitCode."
     }
 
     Write-Host "Saved k6 summary to '$summaryPath'."
