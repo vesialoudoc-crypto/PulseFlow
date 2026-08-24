@@ -68,6 +68,7 @@ services:
 
       RabbitMq__QueueName: pulseflow.ingestion-batches
       RabbitMq__ConsumerCount: 1
+      RabbitMq__PublisherChannelCount: 4
 
       Ingestion__ChunkCapacity: 100
 

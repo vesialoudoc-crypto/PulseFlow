@@ -102,6 +102,7 @@ internal sealed class PulseFlowWebApplicationFactory<TProgram> : WebApplicationF
                     ["ConnectionStrings:Redis"] = _redisConnectionString,
                     ["RabbitMq:QueueName"] = _queueName,
                     ["RabbitMq:ConsumerCount"] = _consumerCount.ToString(),
+                    ["RabbitMq:PublisherChannelCount"] = "4",
                     ["Ingestion:ChunkCapacity"] = "2",
                     ["IngestionRateLimit:RequestLimit"] = _requestLimit.ToString(),
                     ["IngestionRateLimit:WindowDuration"] = _windowDuration.ToString()

@@ -18,4 +18,8 @@ public sealed class RabbitMqOptions
     [Range(1, int.MaxValue)]
     // This changes worker count in one process, not the number of API instances.
     public int ConsumerCount { get; init; } = 1;
+
+    [Range(1, int.MaxValue)]
+    // This bounds concurrent publishing in one API process.
+    public int PublisherChannelCount { get; init; } = 4;
 }
