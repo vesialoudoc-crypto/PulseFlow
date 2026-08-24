@@ -1,0 +1,9 @@
+services:
+  api:
+    extends:
+      file: ./compose.api.yaml
+      service: api
+    ports:
+      # The default is the documented normal-local endpoint. The performance
+      # runner overrides it for its isolated Compose project.
+      - "${PULSEFLOW_INGRESS_PORT:-5254}:8080"

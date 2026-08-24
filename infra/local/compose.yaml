@@ -1,38 +1,3 @@
-# Settings shared by both API containers. The YAML anchor keeps their configuration in one place.
-# `<<: *api-defaults` below copies these settings into each API service. This avoids
-# accidentally configuring api-1 and api-2 differently while they are replicas.
-x-api-defaults: &api-defaults
-  build:
-    context: ../..
-    dockerfile: src/PulseFlow.Api/Dockerfile
-    target: final
-  environment:
-    ASPNETCORE_URLS: "http://+:8080"
-
-    ConnectionStrings__PulseFlow: Host=postgres;Port=5432;Database=pulseflow;Username=pulseflow;Password=pulseflow-local-password
-    ConnectionStrings__RabbitMq: amqp://pulseflow:pulseflow-local-password@rabbitmq:5672/
-    ConnectionStrings__Redis: redis:6379,abortConnect=false
-
-    RabbitMq__QueueName: pulseflow.ingestion-batches
-    # Each API container also runs one parser worker. Two API containers therefore
-    # create two workers in total, without increasing the per-container setting.
-    RabbitMq__ConsumerCount: 1
-    RabbitMq__PublisherChannelCount: 4
-
-    Ingestion__ChunkCapacity: 100
-
-    IngestionRateLimit__RequestLimit: 10000000
-    IngestionRateLimit__WindowDuration: "00:01:00"
-  depends_on:
-    # The API waits for its shared dependencies. Migrations must finish first so the
-    # database schema exists before either API container accepts requests.
-    rabbitmq:
-      condition: service_healthy
-    redis:
-      condition: service_healthy
-    migrations:
-      condition: service_completed_successfully
-
 services:
   # Service names are also host names inside the Compose network. For example, the
   # API connects to PostgreSQL using the name `postgres`, not localhost.
@@ -62,8 +27,9 @@ services:
     volumes:
       - rabbitmq_data:/var/lib/rabbitmq
     ports:
-      # This existing host port is kept for local RabbitMQ access.
-      - "15692:15692"
+      # Keep the default for normal local use. The performance runner supplies a
+      # different value so its isolated project can coexist with a normal stack.
+      - "${PULSEFLOW_RABBITMQ_METRICS_PORT:-15692}:15692"
     healthcheck:
       test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
       interval: 5s
@@ -98,31 +64,6 @@ services:
       - update
       - --connection
       - Host=postgres;Port=5432;Database=pulseflow;Username=pulseflow;Password=pulseflow-local-password
-
-  haproxy:
-    # HAProxy is the only local ingress for the two API replicas.
-    image: haproxy:3.2.9-alpine
-    # Startup ordering only; HAProxy's own health checks decide whether a replica
-    # receives traffic after it has started.
-    depends_on:
-      - api-1
-      - api-2
-    ports:
-      # The single public endpoint. API containers intentionally have no direct
-      # host ports, so local clients exercise load balancing and failover.
-      - "5254:8080"
-    volumes:
-      # Keep the proxy policy versioned with the local stack and prevent the
-      # container from modifying the source configuration.
-      - ./haproxy/haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
-
-  # These are equivalent API replicas. Their distinct service names are HAProxy
-  # backend identities, making distribution and failover visible in proxy logs.
-  api-1:
-    <<: *api-defaults
-
-  api-2:
-    <<: *api-defaults
 
 volumes:
   # Named volumes are managed by Docker and preserve local state between container recreations.

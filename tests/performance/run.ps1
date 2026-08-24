@@ -1,3 +1,12 @@
+[CmdletBinding()]
+param(
+    [Parameter(Mandatory)]
+    [ValidateSet('Single', 'Multi')]
+    [string]$Topology,
+
+    [switch]$ValidateTopology
+)
+
 $ErrorActionPreference = 'Stop'
 
 if ($PSVersionTable.PSEdition -ne 'Core' -or $PSVersionTable.PSVersion.Major -lt 7) {
@@ -24,23 +33,80 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Docker is unavailable. Start Docker Desktop or Docker Engine, then run this script again.'
 }
 
-$k6Command = Get-Command k6 -ErrorAction SilentlyContinue
-if ($null -eq $k6Command) {
-    throw 'Grafana k6 is unavailable. Install k6, then run this script again.'
-}
-
 # Give each future run a separate, timestamped location for reproducible artifacts.
 $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
 $resultsDirectory = Join-Path $PSScriptRoot 'results'
 $resultDirectory = Join-Path $resultsDirectory $timestamp
 
+$repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot '..\\..')).Path
+$composeDirectory = Join-Path $repositoryRoot 'infra\\local'
+$composeFileArguments = @(
+    '--file'
+    (Join-Path $composeDirectory 'compose.yaml')
+    '--file'
+    (Join-Path $composeDirectory "compose.$($Topology.ToLowerInvariant()).yaml")
+)
+
+$topologyConfiguration = switch ($Topology) {
+    'Single' {
+        [PSCustomObject]@{
+            ComposeProjectName = 'pulseflow-performance-single'
+            IngressPort = 5255
+            RabbitMqMetricsPort = 15693
+            ResourceServices = @('api', 'rabbitmq', 'redis', 'postgres')
+        }
+    }
+    'Multi' {
+        [PSCustomObject]@{
+            ComposeProjectName = 'pulseflow-performance-multi'
+            IngressPort = 5256
+            RabbitMqMetricsPort = 15694
+            ResourceServices = @('haproxy', 'api-1', 'api-2', 'rabbitmq', 'redis', 'postgres')
+        }
+    }
+}
+
+$composeProjectName = $topologyConfiguration.ComposeProjectName
+$resourceServices = $topologyConfiguration.ResourceServices
+$livenessUri = "http://localhost:$($topologyConfiguration.IngressPort)/health/live"
+$rabbitMqMetricsUri = "http://localhost:$($topologyConfiguration.RabbitMqMetricsPort)/metrics/detailed?family=queue_coarse_metrics"
+$expectedComposeServices = @($resourceServices + 'migrations' | Sort-Object)
+
+# Use ports distinct from normal local Compose defaults and from the other performance
+# topology so either isolated performance stack can coexist with a normal stack.
+$env:PULSEFLOW_INGRESS_PORT = $topologyConfiguration.IngressPort
+$env:PULSEFLOW_RABBITMQ_METRICS_PORT = $topologyConfiguration.RabbitMqMetricsPort
+$env:BASE_URL = "http://localhost:$($topologyConfiguration.IngressPort)"
+
+if ($ValidateTopology) {
+    $resolvedComposeServices = @(
+        & $dockerCommand.Source compose @composeFileArguments --project-name $composeProjectName config --services
+    ) | ForEach-Object { $_.Trim() } | Sort-Object
+
+    if ($LASTEXITCODE -ne 0) {
+        throw "Failed to resolve the Compose configuration for topology '$Topology'."
+    }
+
+    $missingServices = @($expectedComposeServices | Where-Object { $_ -notin $resolvedComposeServices })
+    $unexpectedServices = @($resolvedComposeServices | Where-Object { $_ -notin $expectedComposeServices })
+    if ($missingServices.Count -ne 0 -or $unexpectedServices.Count -ne 0) {
+        throw "Topology '$Topology' resolved unexpected Compose services. Missing: $($missingServices -join ', '). Unexpected: $($unexpectedServices -join ', ')."
+    }
+
+    Write-Host "Topology '$Topology' resource services: $($resourceServices -join ', ')."
+    Write-Host "Topology '$Topology' Compose services: $($resolvedComposeServices -join ', ')."
+    return
+}
+
+$k6Command = Get-Command k6 -ErrorAction SilentlyContinue
+if ($null -eq $k6Command) {
+    throw 'Grafana k6 is unavailable. Install k6, then run this script again.'
+}
+
 New-Item -ItemType Directory -Path $resultDirectory -ErrorAction Stop | Out-Null
 Write-Output $resultDirectory
 
-$composeProjectName = 'pulseflow-performance'
-$livenessUri = 'http://localhost:5254/health/live'
 $livenessPollInterval = [TimeSpan]::FromSeconds(2)
-$rabbitMqMetricsUri = 'http://localhost:15692/metrics/detailed?family=queue_coarse_metrics'
 $rabbitMqMetricsPollIntervalSeconds = 2
 $downstreamCompletionTimeout = [TimeSpan]::FromMinutes(5)
 
@@ -117,7 +183,8 @@ function Get-CurrentRunPerformanceReport {
         [string]$ContainerCsvPath,
         [string]$DatabasePath,
         [string]$ResultDirectory,
-        [string]$Duration
+        [string]$Duration,
+        [string[]]$ResourceServices
     )
 
     foreach ($artifactPath in @($SummaryPath, $RabbitMqCsvPath, $ContainerCsvPath, $DatabasePath)) {
@@ -237,7 +304,7 @@ function Get-CurrentRunPerformanceReport {
     }
 
     $resourcePeaks = @{}
-    foreach ($service in @('haproxy', 'api-1', 'api-2', 'rabbitmq', 'redis', 'postgres')) {
+    foreach ($service in $ResourceServices) {
         $serviceRows = @($containerRows | Where-Object { $_.service -eq $service })
         if ($serviceRows.Count -eq 0) {
             throw "Container samples '$ContainerCsvPath' do not contain measurements for service '$service'."
@@ -287,18 +354,10 @@ function Get-CurrentRunPerformanceReport {
     Write-Host "Approximate drain time: $($drainTimeSeconds.ToString('F1', $culture)) s"
     Write-Host ''
     Write-Host 'Resources:'
-    Write-Host "HAProxy peak CPU: $($resourcePeaks['haproxy'].Cpu.ToString('F2', $culture)) %"
-    Write-Host "HAProxy peak memory: $($resourcePeaks['haproxy'].Memory.ToString('F2', $culture)) MB"
-    Write-Host "API 1 peak CPU: $($resourcePeaks['api-1'].Cpu.ToString('F2', $culture)) %"
-    Write-Host "API 1 peak memory: $($resourcePeaks['api-1'].Memory.ToString('F2', $culture)) MB"
-    Write-Host "API 2 peak CPU: $($resourcePeaks['api-2'].Cpu.ToString('F2', $culture)) %"
-    Write-Host "API 2 peak memory: $($resourcePeaks['api-2'].Memory.ToString('F2', $culture)) MB"
-    Write-Host "RabbitMQ peak CPU: $($resourcePeaks['rabbitmq'].Cpu.ToString('F2', $culture)) %"
-    Write-Host "RabbitMQ peak memory: $($resourcePeaks['rabbitmq'].Memory.ToString('F2', $culture)) MB"
-    Write-Host "Redis peak CPU: $($resourcePeaks['redis'].Cpu.ToString('F2', $culture)) %"
-    Write-Host "Redis peak memory: $($resourcePeaks['redis'].Memory.ToString('F2', $culture)) MB"
-    Write-Host "PostgreSQL peak CPU: $($resourcePeaks['postgres'].Cpu.ToString('F2', $culture)) %"
-    Write-Host "PostgreSQL peak memory: $($resourcePeaks['postgres'].Memory.ToString('F2', $culture)) MB"
+    foreach ($service in $ResourceServices) {
+        Write-Host "$service peak CPU: $($resourcePeaks[$service].Cpu.ToString('F2', $culture)) %"
+        Write-Host "$service peak memory: $($resourcePeaks[$service].Memory.ToString('F2', $culture)) MB"
+    }
     Write-Host '=========================='
 }
 
@@ -335,14 +394,14 @@ function Get-RabbitMqQueueStatus {
 
 # Reset this dedicated Compose project so each measurement begins without state from a previous run.
 Write-Host "Removing the previous '$composeProjectName' Compose stack and its volumes..."
-& $dockerCommand.Source compose --project-name $composeProjectName down --volumes --remove-orphans
+& $dockerCommand.Source compose @composeFileArguments --project-name $composeProjectName down --volumes --remove-orphans
 if ($LASTEXITCODE -ne 0) {
     throw "Failed to remove the previous '$composeProjectName' Compose stack."
 }
 
 try {
     Write-Host "Building and starting the '$composeProjectName' Compose stack..."
-    & $dockerCommand.Source compose --project-name $composeProjectName up --build --detach
+    & $dockerCommand.Source compose @composeFileArguments --project-name $composeProjectName up --build --detach
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to build and start the '$composeProjectName' Compose stack."
     }
@@ -448,8 +507,8 @@ try {
         }
 
         $serviceContainerIds = @{}
-        foreach ($service in @('haproxy', 'api-1', 'api-2', 'rabbitmq', 'redis', 'postgres')) {
-            $containerId = & $dockerCommand.Source compose --project-name $composeProjectName ps -q $service
+        foreach ($service in $resourceServices) {
+            $containerId = & $dockerCommand.Source compose @composeFileArguments --project-name $composeProjectName ps -q $service
             if ($LASTEXITCODE -ne 0 -or [string]::IsNullOrWhiteSpace($containerId)) {
                 throw "Failed to find the running container for Compose service '$service'."
             }
@@ -459,12 +518,13 @@ try {
 
         # Sample in a background job so k6 retains its existing console output.
         # Continue through queue drain because persistence can still consume resources after k6 finishes sending requests.
-        $containerMetricsSampler = Start-Job -ArgumentList $dockerCommand.Source, $serviceContainerIds, $containerCsvPath, $rabbitMqMetricsPollIntervalSeconds -ScriptBlock {
+        $containerMetricsSampler = Start-Job -ArgumentList $dockerCommand.Source, $serviceContainerIds, $containerCsvPath, $rabbitMqMetricsPollIntervalSeconds, $resourceServices -ScriptBlock {
         param(
             [string]$DockerCommandPath,
             [hashtable]$ServiceContainerIds,
             [string]$CsvPath,
-            [int]$PollIntervalSeconds
+            [int]$PollIntervalSeconds,
+            [string[]]$ResourceServices
         )
 
         function ConvertTo-Megabytes {
@@ -495,7 +555,7 @@ try {
             $containerIds = @($ServiceContainerIds.Values)
             $statsOutput = & $DockerCommandPath stats --no-stream --format '{{.Container}}|{{.CPUPerc}}|{{.MemUsage}}' $containerIds 2>$null
             $statsExitCode = $LASTEXITCODE
-            $rows = foreach ($service in @('haproxy', 'api-1', 'api-2', 'rabbitmq', 'redis', 'postgres')) {
+            $rows = foreach ($service in $ResourceServices) {
                 $cpuPercent = $null
                 $memoryUsageMb = $null
                 $containerIdPrefix = $ServiceContainerIds[$service].Substring(0, [Math]::Min(12, $ServiceContainerIds[$service].Length))
@@ -547,7 +607,7 @@ try {
                 Write-Host "Queue backlog: ready=$($queueStatus.MessagesReady), unacknowledged=$($queueStatus.MessagesUnacknowledged)."
             }
             else {
-                $persistedRowCount = & $dockerCommand.Source compose --project-name $composeProjectName exec -T postgres `
+                $persistedRowCount = & $dockerCommand.Source compose @composeFileArguments --project-name $composeProjectName exec -T postgres `
                     psql -U pulseflow -d pulseflow -tAc 'SELECT COUNT(*) FROM events;'
                 if ($LASTEXITCODE -ne 0) {
                     throw 'Failed to query the persisted event count from PostgreSQL.'
@@ -599,11 +659,12 @@ try {
         -ContainerCsvPath $containerCsvPath `
         -DatabasePath $databasePath `
         -ResultDirectory $resultDirectory `
-        -Duration '10s'
+        -Duration '10s' `
+        -ResourceServices $resourceServices
 }
 finally {
     Write-Host "Cleaning up the '$composeProjectName' Compose stack..."
-    & $dockerCommand.Source compose --project-name $composeProjectName down --volumes --remove-orphans
+    & $dockerCommand.Source compose @composeFileArguments --project-name $composeProjectName down --volumes --remove-orphans
     if ($LASTEXITCODE -ne 0) {
         throw "Failed to clean up the '$composeProjectName' Compose stack."
     }
