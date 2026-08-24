@@ -31,8 +31,10 @@ For every run, the runner:
    creates a fresh stack under that isolated Compose project name.
 2. Waits until `http://localhost:5254/health/live` returns HTTP 200 before starting
    the load scenario.
-3. Runs `ingestion-baseline.js` with k6 and saves the k6 summary.
-4. Samples the RabbitMQ ingestion queue backlog every two seconds while k6 runs.
+3. Starts RabbitMQ backlog and container-resource sampling, then runs
+   `ingestion-baseline.js` with k6 and saves the k6 summary.
+4. Waits for the RabbitMQ ingestion queue to drain, then reads the final persisted
+   row count from PostgreSQL.
 5. Removes the `pulseflow-performance` Compose stack and its volumes when the run
    ends, including when startup or k6 fails after the stack has been started.
 
@@ -52,6 +54,10 @@ It contains:
 - `k6-summary.json` — the k6 end-of-run summary.
 - `rabbitmq.csv` — periodic backlog samples for the
   `pulseflow.ingestion-batches` queue.
+- `database.txt` — the final PostgreSQL persisted row count and the UTC time at
+  which it was captured.
+- `containers.csv` — periodic CPU and memory samples for the local Compose
+  containers.
 
 `rabbitmq.csv` has the following columns:
 
@@ -60,6 +66,23 @@ It contains:
 - `messages_unacknowledged` — delivered messages that have not yet been acknowledged.
 - `messages_total` — total queue messages at the sample time (ready plus
   unacknowledged).
+
+After k6 exits successfully, the runner waits for the RabbitMQ main queue to be
+fully drained (`messages_ready = 0` and `messages_unacknowledged = 0`) before it
+reads PostgreSQL. Consumer acknowledgements happen only after persistence completes,
+so the resulting `database.txt` row count represents the completed asynchronous
+persistence work for that run.
+
+`containers.csv` has the following columns:
+
+- `timestamp_utc` — UTC time at which the sample was captured, in ISO 8601 format.
+- `service` — the Compose service that produced the sample: `api`, `rabbitmq`,
+  `redis`, or `postgres`.
+- `cpu_percent` — the container CPU utilization reported by Docker, as a percentage.
+- `memory_usage_mb` — the container memory usage reported by Docker, in megabytes.
+
+Container sampling starts with k6 and continues through RabbitMQ drain. This captures
+resource use from asynchronous persistence after HTTP load stops.
 
 ## Interpreting this scenario
 
