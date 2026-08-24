@@ -183,7 +183,6 @@ function Get-CurrentRunPerformanceReport {
         [string]$ContainerCsvPath,
         [string]$DatabasePath,
         [string]$ResultDirectory,
-        [string]$Duration,
         [string[]]$ResourceServices
     )
 
@@ -329,7 +328,7 @@ function Get-CurrentRunPerformanceReport {
     Write-Host ''
     Write-Host '=== PERFORMANCE REPORT ==='
     Write-Host "VUs: $VirtualUsers"
-    Write-Host "Duration: $Duration"
+    Write-Host 'Duration: 10s (fixed baseline)'
     Write-Host "Result directory: $ResultDirectory"
     Write-Host ''
     Write-Host 'HTTP:'
@@ -617,6 +616,14 @@ try {
                 Write-Host "Queue is empty; persisted rows=$persistedRowCount, accepted HTTP 202=$acceptedRequestCount."
 
                 if ($persistedRowCount -eq $acceptedRequestCount) {
+                    Stop-Job -Job $rabbitMqMetricsSampler -ErrorAction Stop
+                    Wait-Job -Job $rabbitMqMetricsSampler -ErrorAction Stop | Out-Null
+                    Remove-Job -Job $rabbitMqMetricsSampler -Force -ErrorAction Stop
+                    $rabbitMqMetricsSampler = $null
+
+                    "$([DateTime]::UtcNow.ToString('O')),0,0,0" |
+                        Add-Content -LiteralPath $rabbitMqCsvPath -Encoding utf8 -ErrorAction Stop
+
                     break
                 }
             }
@@ -659,7 +666,6 @@ try {
         -ContainerCsvPath $containerCsvPath `
         -DatabasePath $databasePath `
         -ResultDirectory $resultDirectory `
-        -Duration '10s' `
         -ResourceServices $resourceServices
 }
 finally {

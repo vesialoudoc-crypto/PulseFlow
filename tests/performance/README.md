@@ -25,13 +25,12 @@ pwsh .\tests\performance\run.ps1 -Topology Single -ValidateTopology
 pwsh .\tests\performance\run.ps1 -Topology Multi -ValidateTopology
 ```
 
-The runner uses the scenario defaults of 10 virtual users for 30 seconds. To adjust
-the load for a local experiment, set `VUS` and `DURATION` in the current shell before
-running the command:
+The ingestion baseline duration is fixed at 10 seconds so runs remain directly
+comparable. Do not change duration when recording baselines. To adjust the load for a
+local experiment, set only `VUS` in the current shell before running the command:
 
 ```powershell
 $env:VUS = '20'
-$env:DURATION = '1m'
 pwsh .\tests\performance\run.ps1 -Topology Single
 ```
 
