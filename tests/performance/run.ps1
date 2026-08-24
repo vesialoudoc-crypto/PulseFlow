@@ -1,5 +1,18 @@
 $ErrorActionPreference = 'Stop'
 
+if ($PSVersionTable.PSEdition -ne 'Core' -or $PSVersionTable.PSVersion.Major -lt 7) {
+    $pwshCommand = Get-Command pwsh -ErrorAction SilentlyContinue
+    if ($null -eq $pwshCommand) {
+        throw 'PowerShell 7 (pwsh) is required to run the performance runner. Install pwsh, then run this script again.'
+    }
+
+    Write-Host 'Restarting performance runner with PowerShell 7...'
+    & $pwshCommand.Source -NoProfile -File $PSCommandPath @args
+    exit $LASTEXITCODE
+}
+
+Write-Host "Running performance runner with PowerShell $($PSVersionTable.PSVersion)."
+
 # Fail early with actionable errors so a performance run never starts with missing local dependencies.
 $dockerCommand = Get-Command docker -ErrorAction SilentlyContinue
 if ($null -eq $dockerCommand) {
@@ -48,15 +61,26 @@ try {
 
     while (-not $apiIsLive) {
         try {
-            $response = Invoke-WebRequest -Uri $livenessUri -Method Get -SkipHttpErrorCheck -TimeoutSec 5
-            if ($response.StatusCode -eq 200) {
-                Write-Host 'API is live.'
-                $apiIsLive = $true
-                break
+            $response = Invoke-WebRequest -Uri $livenessUri -Method Get
+            if ($response.StatusCode -ne 200) {
+                throw "The API liveness endpoint returned HTTP $($response.StatusCode)."
             }
+
+            Write-Host 'API is live.'
+            $apiIsLive = $true
+            break
         }
         catch {
-            # The API may not have bound its port yet.
+            $isConnectionError = $_.CategoryInfo.Category -eq 'ConnectionError'
+            $isResponseEnded =
+                $_.FullyQualifiedErrorId -like '*ResponseEnded*' -or
+                $_.ErrorDetails.Message -like '*ResponseEnded*'
+
+            if (-not ($isConnectionError -or $isResponseEnded)) {
+                throw
+            }
+
+            # The API may not have bound its port yet or may have closed a request while starting.
         }
 
         Start-Sleep -Seconds $livenessPollInterval.TotalSeconds
