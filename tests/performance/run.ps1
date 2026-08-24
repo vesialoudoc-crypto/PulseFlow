@@ -66,6 +66,238 @@ function Get-AcceptedRequestCountFromK6Summary {
     return $acceptedRequestCount
 }
 
+function Get-RequiredNonNegativeDouble {
+    param(
+        [object]$Value,
+        [string]$Description
+    )
+
+    if ($null -eq $Value) {
+        throw "$Description is missing."
+    }
+
+    try {
+        $numericValue = [double]::Parse(
+            $Value.ToString(),
+            [Globalization.CultureInfo]::InvariantCulture
+        )
+    }
+    catch {
+        throw "$Description is not a valid number."
+    }
+
+    if ([double]::IsNaN($numericValue) -or [double]::IsInfinity($numericValue) -or $numericValue -lt 0) {
+        throw "$Description must be a non-negative finite number."
+    }
+
+    return $numericValue
+}
+
+function Get-RequiredK6MetricValue {
+    param(
+        [object]$Summary,
+        [string]$MetricName,
+        [string]$ValueName,
+        [string]$SummaryPath
+    )
+
+    $metric = $Summary.metrics.PSObject.Properties[$MetricName].Value
+    if ($null -eq $metric) {
+        throw "Grafana k6 summary '$SummaryPath' does not contain metric '$MetricName'."
+    }
+
+    $value = $metric.PSObject.Properties[$ValueName].Value
+    return Get-RequiredNonNegativeDouble $value "Grafana k6 metric '$MetricName' value '$ValueName' in '$SummaryPath'"
+}
+
+function Get-CurrentRunPerformanceReport {
+    param(
+        [string]$SummaryPath,
+        [string]$RabbitMqCsvPath,
+        [string]$ContainerCsvPath,
+        [string]$DatabasePath,
+        [string]$ResultDirectory,
+        [string]$Duration
+    )
+
+    foreach ($artifactPath in @($SummaryPath, $RabbitMqCsvPath, $ContainerCsvPath, $DatabasePath)) {
+        if (-not (Test-Path -LiteralPath $artifactPath -PathType Leaf)) {
+            throw "Required performance artifact '$artifactPath' was not created for this run."
+        }
+    }
+
+    try {
+        $summary = Get-Content -LiteralPath $SummaryPath -Raw -ErrorAction Stop | ConvertFrom-Json -ErrorAction Stop
+    }
+    catch {
+        throw "Failed to parse Grafana k6 summary '$SummaryPath': $($_.Exception.Message)"
+    }
+
+    $requestCount = Get-RequiredK6MetricValue $summary 'http_reqs' 'count' $SummaryPath
+    $requestsPerSecond = Get-RequiredK6MetricValue $summary 'http_reqs' 'rate' $SummaryPath
+    $virtualUsers = Get-RequiredK6MetricValue $summary 'vus_max' 'max' $SummaryPath
+    $averageLatency = Get-RequiredK6MetricValue $summary 'http_req_duration' 'avg' $SummaryPath
+    $p90Latency = Get-RequiredK6MetricValue $summary 'http_req_duration' 'p(90)' $SummaryPath
+    $p95Latency = Get-RequiredK6MetricValue $summary 'http_req_duration' 'p(95)' $SummaryPath
+    $maxLatency = Get-RequiredK6MetricValue $summary 'http_req_duration' 'max' $SummaryPath
+    $httpFailureRate = Get-RequiredK6MetricValue $summary 'http_req_failed' 'value' $SummaryPath
+
+    if ($httpFailureRate -gt 1) {
+        throw "Grafana k6 metric 'http_req_failed' rate in '$SummaryPath' must not exceed 1."
+    }
+
+    $statusCheck = $summary.root_group.checks.PSObject.Properties['status is 202'].Value
+    if ($null -eq $statusCheck) {
+        throw "Grafana k6 summary '$SummaryPath' does not contain the 'status is 202' check result."
+    }
+
+    $acceptedRequestCount = Get-RequiredNonNegativeDouble $statusCheck.passes "Grafana k6 'status is 202' check passes in '$SummaryPath'"
+    $failed202CheckCount = Get-RequiredNonNegativeDouble $statusCheck.fails "Grafana k6 'status is 202' check failures in '$SummaryPath'"
+
+    try {
+        $databaseContents = Get-Content -LiteralPath $DatabasePath -Raw -ErrorAction Stop
+    }
+    catch {
+        throw "Failed to read database verification '$DatabasePath': $($_.Exception.Message)"
+    }
+
+    $acceptedDatabaseMatch = [regex]::Match($databaseContents, '(?m)^Accepted HTTP 202 count:\s*(\d+)\s*$')
+    $persistedDatabaseMatch = [regex]::Match($databaseContents, '(?m)^Persisted row count:\s*(\d+)\s*$')
+    if (-not $acceptedDatabaseMatch.Success -or -not $persistedDatabaseMatch.Success) {
+        throw "Database verification '$DatabasePath' does not contain the required accepted HTTP 202 and persisted row counts."
+    }
+
+    $acceptedDatabaseCount = Get-RequiredNonNegativeDouble $acceptedDatabaseMatch.Groups[1].Value "Accepted HTTP 202 count in '$DatabasePath'"
+    $persistedRowCount = Get-RequiredNonNegativeDouble $persistedDatabaseMatch.Groups[1].Value "Persisted row count in '$DatabasePath'"
+
+    if ($acceptedDatabaseCount -ne $acceptedRequestCount) {
+        throw "Database verification '$DatabasePath' accepted HTTP 202 count does not match the current run's k6 summary."
+    }
+
+    try {
+        $rabbitMqRows = @(Import-Csv -LiteralPath $RabbitMqCsvPath -ErrorAction Stop)
+    }
+    catch {
+        throw "Failed to parse RabbitMQ samples '$RabbitMqCsvPath': $($_.Exception.Message)"
+    }
+
+    if ($rabbitMqRows.Count -eq 0) {
+        throw "RabbitMQ samples '$RabbitMqCsvPath' do not contain any measurements."
+    }
+
+    $rabbitMqSamples = for ($index = 0; $index -lt $rabbitMqRows.Count; $index++) {
+        $row = $rabbitMqRows[$index]
+
+        try {
+            $timestamp = [DateTimeOffset]::Parse(
+                $row.timestamp_utc,
+                [Globalization.CultureInfo]::InvariantCulture,
+                [Globalization.DateTimeStyles]::RoundtripKind
+            )
+        }
+        catch {
+            throw "RabbitMQ sample $($index + 1) in '$RabbitMqCsvPath' has an invalid timestamp."
+        }
+
+        [PSCustomObject]@{
+            Index = $index
+            Timestamp = $timestamp
+            MessagesReady = Get-RequiredNonNegativeDouble $row.messages_ready "RabbitMQ messages_ready in sample $($index + 1) of '$RabbitMqCsvPath'"
+            MessagesUnacknowledged = Get-RequiredNonNegativeDouble $row.messages_unacknowledged "RabbitMQ messages_unacknowledged in sample $($index + 1) of '$RabbitMqCsvPath'"
+            MessagesTotal = Get-RequiredNonNegativeDouble $row.messages_total "RabbitMQ messages_total in sample $($index + 1) of '$RabbitMqCsvPath'"
+        }
+    }
+
+    $rabbitMqSamples = @($rabbitMqSamples | Sort-Object Timestamp, Index)
+    $peakReady = ($rabbitMqSamples | Measure-Object -Property MessagesReady -Maximum).Maximum
+    $peakUnacknowledged = ($rabbitMqSamples | Measure-Object -Property MessagesUnacknowledged -Maximum).Maximum
+    $peakTotalSample = $rabbitMqSamples |
+        Sort-Object @{ Expression = 'MessagesTotal'; Descending = $true }, Timestamp, Index |
+        Select-Object -First 1
+    $peakTotalBacklog = $peakTotalSample.MessagesTotal
+    $drainSample = $rabbitMqSamples |
+        Where-Object { $_.Timestamp -gt $peakTotalSample.Timestamp -and $_.MessagesTotal -eq 0 } |
+        Select-Object -First 1
+
+    if ($null -eq $drainSample) {
+        throw "RabbitMQ samples '$RabbitMqCsvPath' do not contain a zero-backlog sample later than the peak total backlog sample."
+    }
+
+    $drainTimeSeconds = ($drainSample.Timestamp - $peakTotalSample.Timestamp).TotalSeconds
+
+    try {
+        $containerRows = @(Import-Csv -LiteralPath $ContainerCsvPath -ErrorAction Stop)
+    }
+    catch {
+        throw "Failed to parse container samples '$ContainerCsvPath': $($_.Exception.Message)"
+    }
+
+    if ($containerRows.Count -eq 0) {
+        throw "Container samples '$ContainerCsvPath' do not contain any measurements."
+    }
+
+    $resourcePeaks = @{}
+    foreach ($service in @('api', 'rabbitmq', 'redis', 'postgres')) {
+        $serviceRows = @($containerRows | Where-Object { $_.service -eq $service })
+        if ($serviceRows.Count -eq 0) {
+            throw "Container samples '$ContainerCsvPath' do not contain measurements for service '$service'."
+        }
+
+        $cpuSamples = for ($index = 0; $index -lt $serviceRows.Count; $index++) {
+            Get-RequiredNonNegativeDouble $serviceRows[$index].cpu_percent "Container CPU metric for service '$service' in sample $($index + 1) of '$ContainerCsvPath'"
+        }
+        $memorySamples = for ($index = 0; $index -lt $serviceRows.Count; $index++) {
+            Get-RequiredNonNegativeDouble $serviceRows[$index].memory_usage_mb "Container memory metric for service '$service' in sample $($index + 1) of '$ContainerCsvPath'"
+        }
+
+        $resourcePeaks[$service] = [PSCustomObject]@{
+            Cpu = ($cpuSamples | Measure-Object -Maximum).Maximum
+            Memory = ($memorySamples | Measure-Object -Maximum).Maximum
+        }
+    }
+
+    $culture = [Globalization.CultureInfo]::InvariantCulture
+    $acceptedEqualsPersisted = $acceptedRequestCount -eq $persistedRowCount
+
+    Write-Host ''
+    Write-Host '=== PERFORMANCE REPORT ==='
+    Write-Host "VUs: $VirtualUsers"
+    Write-Host "Duration: $Duration"
+    Write-Host "Result directory: $ResultDirectory"
+    Write-Host ''
+    Write-Host 'HTTP:'
+    Write-Host "Requests: $($requestCount.ToString('N0', $culture))"
+    Write-Host "Requests/sec: $($requestsPerSecond.ToString('F2', $culture))"
+    Write-Host "Avg latency: $($averageLatency.ToString('F2', $culture)) ms"
+    Write-Host "p90 latency: $($p90Latency.ToString('F2', $culture)) ms"
+    Write-Host "p95 latency: $($p95Latency.ToString('F2', $culture)) ms"
+    Write-Host "Max latency: $($maxLatency.ToString('F2', $culture)) ms"
+    Write-Host "HTTP failures: $(($httpFailureRate * 100).ToString('F2', $culture))%"
+    Write-Host "Failed 202 checks: $($failed202CheckCount.ToString('N0', $culture))"
+    Write-Host "Accepted HTTP 202: $($acceptedRequestCount.ToString('N0', $culture))"
+    Write-Host ''
+    Write-Host 'Persistence:'
+    Write-Host "Persisted PostgreSQL rows: $($persistedRowCount.ToString('N0', $culture))"
+    Write-Host "Accepted == persisted: $acceptedEqualsPersisted"
+    Write-Host ''
+    Write-Host 'RabbitMQ:'
+    Write-Host "Peak ready: $($peakReady.ToString('N0', $culture))"
+    Write-Host "Peak unacknowledged: $($peakUnacknowledged.ToString('N0', $culture))"
+    Write-Host "Peak total backlog: $($peakTotalBacklog.ToString('N0', $culture))"
+    Write-Host "Approximate drain time: $($drainTimeSeconds.ToString('F1', $culture)) s"
+    Write-Host ''
+    Write-Host 'Resources:'
+    Write-Host "API peak CPU: $($resourcePeaks['api'].Cpu.ToString('F2', $culture)) %"
+    Write-Host "API peak memory: $($resourcePeaks['api'].Memory.ToString('F2', $culture)) MB"
+    Write-Host "RabbitMQ peak CPU: $($resourcePeaks['rabbitmq'].Cpu.ToString('F2', $culture)) %"
+    Write-Host "RabbitMQ peak memory: $($resourcePeaks['rabbitmq'].Memory.ToString('F2', $culture)) MB"
+    Write-Host "Redis peak CPU: $($resourcePeaks['redis'].Cpu.ToString('F2', $culture)) %"
+    Write-Host "Redis peak memory: $($resourcePeaks['redis'].Memory.ToString('F2', $culture)) MB"
+    Write-Host "PostgreSQL peak CPU: $($resourcePeaks['postgres'].Cpu.ToString('F2', $culture)) %"
+    Write-Host "PostgreSQL peak memory: $($resourcePeaks['postgres'].Memory.ToString('F2', $culture)) MB"
+    Write-Host '=========================='
+}
+
 function Get-RabbitMqQueueMetricValue {
     param(
         [string[]]$MetricLines,
@@ -356,6 +588,14 @@ try {
     }
 
     Write-Host "Saved k6 summary to '$summaryPath'."
+
+    Get-CurrentRunPerformanceReport `
+        -SummaryPath $summaryPath `
+        -RabbitMqCsvPath $rabbitMqCsvPath `
+        -ContainerCsvPath $containerCsvPath `
+        -DatabasePath $databasePath `
+        -ResultDirectory $resultDirectory `
+        -Duration '10s'
 }
 finally {
     Write-Host "Cleaning up the '$composeProjectName' Compose stack..."
