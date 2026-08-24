@@ -1,6 +1,7 @@
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.OpenApi;
+using PulseFlow.Api.Health;
 using PulseFlow.Api.Http;
 using PulseFlow.Api.Ingestion;
 using PulseFlow.Api.Ingestion.Messaging;
@@ -20,6 +21,8 @@ if (connectionString is null)
 }
 
 builder.Services.AddControllers();
+
+builder.Services.AddPulseFlowHealthChecks();
 
 builder.Services.AddProblemDetails();
 builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
@@ -98,6 +101,8 @@ if (app.Environment.IsDevelopment())
 }
 
 app.UseHttpsRedirection();
+
+app.MapPulseFlowHealthChecks();
 
 app.MapControllers();
 

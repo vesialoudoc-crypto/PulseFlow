@@ -263,6 +263,15 @@ to whole delta seconds; an unavailable result returns HTTP 503. Focused HTTP tes
 verify these mappings, confirm that rejected requests do not call the publisher, and
 confirm that an allowed request is published and returns HTTP 202.
 
+The first reproducible load-test harness is available at
+[`tests/performance/ingestion-baseline.js`](../tests/performance/ingestion-baseline.js). It uses a closed model
+with configurable VUs and duration, posts one valid Event Contract v2 NDJSON record
+per request, and checks for HTTP 202. It intentionally has no performance thresholds
+or measured result yet. Its local-run instructions require a high enough local
+rate-limit quota to prevent HTTP 429 from becoming the limiting factor. Stage 4
+remains in progress: no baseline has been recorded, no bottleneck has been identified,
+and no improvement has been evaluated.
+
 ### Do Not Decide in Advance
 
 The exact number of instances or target performance metrics before a baseline

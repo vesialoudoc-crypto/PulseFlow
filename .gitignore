@@ -483,3 +483,6 @@ $RECYCLE.BIN/
 
 # Local documentation backups
 /docs/.ru-backup/
+
+# Local performance-test output
+tests/performance/results/
