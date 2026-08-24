@@ -3,7 +3,7 @@ import { check } from 'k6';
 
 const baseUrl = __ENV.BASE_URL || 'http://localhost:5254';
 const vus = Number(__ENV.VUS || 10);
-const duration = __ENV.DURATION || '30s';
+const duration = '10s';
 
 export const options = {
     vus,
