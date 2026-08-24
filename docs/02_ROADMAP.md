@@ -264,7 +264,7 @@ verify these mappings, confirm that rejected requests do not call the publisher,
 confirm that an allowed request is published and returns HTTP 202.
 
 The first reproducible load-test harness is available at
-[`load/ingestion-baseline.js`](../load/ingestion-baseline.js). It uses a closed model
+[`tests/performance/ingestion-baseline.js`](../tests/performance/ingestion-baseline.js). It uses a closed model
 with configurable VUs and duration, posts one valid Event Contract v2 NDJSON record
 per request, and checks for HTTP 202. It intentionally has no performance thresholds
 or measured result yet. Its local-run instructions require a high enough local

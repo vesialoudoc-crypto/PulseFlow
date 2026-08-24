@@ -26,7 +26,7 @@ host, not in Compose.
 In another PowerShell window, run the default scenario:
 
 ```powershell
-k6 run .\load\ingestion-baseline.js
+k6 run .\tests\performance\ingestion-baseline.js
 ```
 
 Override the target and load without hardcoding a production host:
@@ -35,7 +35,7 @@ Override the target and load without hardcoding a production host:
 $env:BASE_URL = 'http://localhost:5254'
 $env:VUS = '20'
 $env:DURATION = '1m'
-k6 run .\load\ingestion-baseline.js
+k6 run .\tests\performance\ingestion-baseline.js
 ```
 
 Stop the stack when finished:

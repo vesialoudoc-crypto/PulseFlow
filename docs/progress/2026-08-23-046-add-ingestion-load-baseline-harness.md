@@ -9,13 +9,13 @@ API hosts. No reproducible load scenario or baseline measurement existed.
 
 ## What changed
 
-- Added `load/ingestion-baseline.js`, a Grafana k6 closed-model scenario for
+- Added `tests/performance/ingestion-baseline.js`, a Grafana k6 closed-model scenario for
   `POST /api/events`.
 - Each request posts one valid Event Contract v2 record as `application/x-ndjson`.
   It generates a unique `eventId` with `crypto.randomUUID()` and checks for HTTP 202.
 - Made `BASE_URL`, `VUS`, and `DURATION` k6 environment variables. The local defaults
   are `http://localhost:5254`, 10 VUs, and 30 seconds.
-- Added local-run and result-interpretation instructions in `load/README.md`,
+- Added local-run and result-interpretation instructions in `tests/performance/README.md`,
   including the required high local Redis rate-limit quota.
 - Updated the Stage 4 current-implementation record without changing its status.
 
