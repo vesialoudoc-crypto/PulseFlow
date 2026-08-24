@@ -41,6 +41,11 @@ abort; that failed startup recorded no workload result and is not a baseline sam
 - `Ingestion:ChunkCapacity`: 100.
 - Redis rate limit in Compose: 10,000,000 requests per `00:01:00` fixed window.
 
+The measurements above predate the later RabbitMQ publisher-channel-pool change and
+the performance-runner correctness fix that verifies PostgreSQL persistence against
+the k6 HTTP-202 count. Neither later change is part of this baseline configuration or
+its recorded results.
+
 ## Load-sweep results
 
 All latency values are milliseconds. `Failed status checks` means failed `status is
@@ -71,9 +76,10 @@ Values are sampled peak CPU usage and sampled peak memory usage from `containers
 
 ## Conclusion
 
-Baseline 001 is a three-level local load sweep, not three repeated 10-VU / 30-second
-measurements. It records the configured system's HTTP acceptance, sampled queue
-backlog, resource peaks, and final persistence result at 10, 20, and 30 VU.
+Baseline 001 is a three-level local load sweep measured at repository commit
+`ad1da229afeb36dbdf17e7a18d780196a137abd6`, not three repeated 10-VU / 30-second
+measurements. It records that configuration's HTTP acceptance, sampled queue backlog,
+resource peaks, and final persistence result at 10, 20, and 30 VU.
 
 The 30-VU observation is a focused candidate for further investigation: successful
 HTTP 202 checks were not accompanied by persisted rows in this run. The measurements

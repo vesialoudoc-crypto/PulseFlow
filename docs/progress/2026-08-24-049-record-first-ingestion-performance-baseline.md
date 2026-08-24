@@ -12,7 +12,9 @@ recorded.
 
 - Replaced the incorrect repeated `VUS=10`, `DURATION=30s` baseline shape with a
   one-run-per-level load sweep: `10 VU / 10s`, `20 VU / 10s`, and `30 VU / 10s`.
-  Each measured run used the existing runner's fresh isolated Compose stack.
+  The measurements were taken at repository commit
+  `ad1da229afeb36dbdf17e7a18d780196a137abd6`; each measured run used that runner's
+  fresh isolated Compose stack.
 - Rewrote [Ingestion Performance Baseline 001](../performance/ingestion-baseline-001.md)
   to compare the three load levels, including generated-artifact results, RabbitMQ
   and PostgreSQL observations, and sampled container-resource peaks.
@@ -21,17 +23,21 @@ recorded.
 
 ## Resulting repository state
 
-The repository now has a reproducible local load-sweep baseline for one API instance,
-one RabbitMQ consumer, `Ingestion:ChunkCapacity=100`, and a Redis limit of 10,000,000
-requests per one-minute window. The 10-VU and 20-VU runs had zero HTTP failures and
-failed status checks; their final queue samples reached zero and final PostgreSQL row
-counts equalled accepted requests. The 30-VU run also had zero HTTP failures and
-failed status checks, but its final PostgreSQL row count was zero and all sampled
-RabbitMQ backlog values were zero. This result is recorded as an observation requiring
-investigation, not as a successful persistence result.
+Baseline 001 records a reproducible local load sweep at repository commit
+`ad1da229afeb36dbdf17e7a18d780196a137abd6` for one API instance, one RabbitMQ
+consumer, `Ingestion:ChunkCapacity=100`, and a Redis limit of 10,000,000 requests per
+one-minute window. The 10-VU and 20-VU runs had zero HTTP failures and failed status
+checks; their final queue samples reached zero and final PostgreSQL row counts equalled
+accepted requests. The 30-VU run also had zero HTTP failures and failed status checks,
+but its final PostgreSQL row count was zero and all sampled RabbitMQ backlog values
+were zero. This result is recorded as an observation requiring investigation, not as a
+successful persistence result.
 
-No production code, performance-runner code, Compose configuration, optimization, or
-new monitoring infrastructure was changed.
+The recorded measurements predate the later RabbitMQ publisher-channel-pool change and
+the performance-runner correctness fix that verifies PostgreSQL persistence against
+the k6 HTTP-202 count. Those later changes modified production code, Compose
+configuration, and performance-runner code; they are not part of Baseline 001 and have
+not been measured by it.
 
 ## Verification
 

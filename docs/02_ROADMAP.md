@@ -273,7 +273,10 @@ or measured target. The first local baseline is a three-level load sweep of `10 
 enough local rate-limit quota to prevent HTTP 429 from becoming the limiting factor.
 The 30-VU observation requires focused investigation before it can be treated as a
 bottleneck finding. Stage 4 remains in progress, and no improvement has been
-evaluated.
+evaluated. The recorded Baseline 001 measurements were taken at repository commit
+`ad1da229afeb36dbdf17e7a18d780196a137abd6`; they predate the later RabbitMQ
+publisher-channel-pool and performance-runner correctness changes, so those changes
+are not represented by the baseline results.
 
 ### Do Not Decide in Advance
 
