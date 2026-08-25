@@ -2,10 +2,7 @@ using System.Net;
 using System.Net.Http.Json;
 using System.Text;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.AspNetCore.Mvc.Testing;
-using Microsoft.AspNetCore.Hosting;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using PulseFlow.Api.Ingestion.Messaging;
 using PulseFlow.Api.Ingestion.RateLimiting;
 using PulseFlow.IntegrationTests.Infrastructure;
@@ -19,14 +16,13 @@ public sealed class EventAcceptanceTests
     {
         // Arrange
         var publisher = new RecordingIngestionBatchPublisher();
-        using var factory = CreateFactory(publisher);
-        using var client = factory.CreateClient();
+        await using var host = await CreateHostAsync(publisher);
         var expectedBatch = Encoding.UTF8.GetBytes(
             "{\"type\":\"first\"}\r\n{ not-json }\n");
         using var content = CreateNdjsonContent(expectedBatch);
 
         // Act
-        using var response = await client.PostAsync("/api/events", content);
+        using var response = await host.Client.PostAsync("/api/events", content);
 
         // Assert
         Assert.Equal(expectedBatch, publisher.PublishedBatch);
@@ -37,13 +33,12 @@ public sealed class EventAcceptanceTests
     {
         // Arrange
         var publisher = new RecordingIngestionBatchPublisher();
-        using var factory = CreateFactory(publisher);
-        using var client = factory.CreateClient();
+        await using var host = await CreateHostAsync(publisher);
         using var content = CreateNdjsonContent(
             Encoding.UTF8.GetBytes("{\"type\":\"event\"}\n"));
 
         // Act
-        using var response = await client.PostAsync("/api/events", content);
+        using var response = await host.Client.PostAsync("/api/events", content);
         var responseBody = await response.Content.ReadAsStringAsync();
 
         // Assert
@@ -57,16 +52,15 @@ public sealed class EventAcceptanceTests
         // Arrange
         var publisher = new RecordingIngestionBatchPublisher();
         var retryAfter = TimeSpan.FromMilliseconds(1500);
-        using var factory = CreateFactory(
+        await using var host = await CreateHostAsync(
             publisher,
             new FixedIngestionRateLimiter(
                 new IngestionRateLimitResult(IngestionRateLimitStatus.Exceeded, retryAfter)));
-        using var client = factory.CreateClient();
         using var content = CreateNdjsonContent(
             Encoding.UTF8.GetBytes("{\"type\":\"event\"}\n"));
 
         // Act
-        using var response = await client.PostAsync("/api/events", content);
+        using var response = await host.Client.PostAsync("/api/events", content);
 
         // Assert
         Assert.Equal(HttpStatusCode.TooManyRequests, response.StatusCode);
@@ -79,16 +73,14 @@ public sealed class EventAcceptanceTests
     {
         // Arrange
         var publisher = new RecordingIngestionBatchPublisher();
-        using var factory = CreateFactory(
+        await using var host = await CreateHostAsync(
             publisher,
-            new FixedIngestionRateLimiter(
-                new IngestionRateLimitResult(IngestionRateLimitStatus.Unavailable)));
-        using var client = factory.CreateClient();
+            new FixedIngestionRateLimiter(new IngestionRateLimitResult(IngestionRateLimitStatus.Unavailable)));
         using var content = CreateNdjsonContent(
             Encoding.UTF8.GetBytes("{\"type\":\"event\"}\n"));
 
         // Act
-        using var response = await client.PostAsync("/api/events", content);
+        using var response = await host.Client.PostAsync("/api/events", content);
 
         // Assert
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
@@ -100,16 +92,14 @@ public sealed class EventAcceptanceTests
     {
         // Arrange
         var publisher = new RecordingIngestionBatchPublisher();
-        using var factory = CreateFactory(
+        await using var host = await CreateHostAsync(
             publisher,
-            new FixedIngestionRateLimiter(
-                new IngestionRateLimitResult(IngestionRateLimitStatus.Allowed)));
-        using var client = factory.CreateClient();
+            new FixedIngestionRateLimiter(new IngestionRateLimitResult(IngestionRateLimitStatus.Allowed)));
         using var content = CreateNdjsonContent(
             Encoding.UTF8.GetBytes("{\"type\":\"event\"}\n"));
 
         // Act
-        using var response = await client.PostAsync("/api/events", content);
+        using var response = await host.Client.PostAsync("/api/events", content);
 
         // Assert
         Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
@@ -121,13 +111,12 @@ public sealed class EventAcceptanceTests
     {
         // Arrange
         var publisher = new RecordingIngestionBatchPublisher();
-        using var factory = CreateFactory(publisher);
-        using var client = factory.CreateClient();
+        await using var host = await CreateHostAsync(publisher);
         using var content = CreateNdjsonContent(
             Encoding.UTF8.GetBytes("{ this-is-not-valid-json\n"));
 
         // Act
-        using var response = await client.PostAsync("/api/events", content);
+        using var response = await host.Client.PostAsync("/api/events", content);
 
         // Assert
         Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
@@ -139,13 +128,12 @@ public sealed class EventAcceptanceTests
         // Arrange
         var publisher = new RecordingIngestionBatchPublisher(
             new InvalidOperationException("Publisher test failure."));
-        using var factory = CreateFactory(publisher);
-        using var client = factory.CreateClient();
+        await using var host = await CreateHostAsync(publisher);
         using var content = CreateNdjsonContent(
             Encoding.UTF8.GetBytes("{\"type\":\"event\"}\n"));
 
         // Act
-        using var response = await client.PostAsync("/api/events", content);
+        using var response = await host.Client.PostAsync("/api/events", content);
         var problemDetails = await response.Content.ReadFromJsonAsync<ProblemDetails>();
 
         // Assert
@@ -157,25 +145,17 @@ public sealed class EventAcceptanceTests
 
     #region Test helpers
 
-    private static WebApplicationFactory<Program> CreateFactory(
+    private static Task<PulseFlowComponentTestHost> CreateHostAsync(
         IIngestionBatchPublisher publisher,
         IIngestionRateLimiter? rateLimiter = null)
     {
-        var factory = new PulseFlowWebApplicationFactory<Program>(
-            "Host=localhost;Database=pulseflow_tests;Username=postgres;Password=postgres");
-
-        return factory.WithWebHostBuilder(builder =>
+        return PulseFlowComponentTestHost.StartAsync(services =>
         {
-            builder.ConfigureServices(services =>
-            {
-                services.RemoveAll<IIngestionBatchPublisher>();
-                services.AddSingleton(publisher);
-                services.RemoveAll<IIngestionRateLimiter>();
-                services.AddSingleton(
-                    rateLimiter
-                    ?? new FixedIngestionRateLimiter(
-                        new IngestionRateLimitResult(IngestionRateLimitStatus.Allowed)));
-            });
+            services.AddSingleton(publisher);
+            services.AddSingleton(
+                rateLimiter
+                ?? new FixedIngestionRateLimiter(
+                    new IngestionRateLimitResult(IngestionRateLimitStatus.Allowed)));
         });
     }
 

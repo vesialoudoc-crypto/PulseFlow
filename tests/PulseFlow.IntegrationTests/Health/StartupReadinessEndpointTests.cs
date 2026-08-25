@@ -1,10 +1,9 @@
-using Microsoft.AspNetCore.Mvc.Testing;
+using System.Net;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
 using PulseFlow.Api.Startup;
 using PulseFlow.IntegrationTests.Infrastructure;
-using System.Net;
 
 namespace PulseFlow.IntegrationTests.Health;
 
@@ -15,13 +14,12 @@ public sealed class StartupReadinessEndpointTests
     {
         // Arrange
         var initializer = new BlockingStartupInitializer();
-        using var factory = CreateFactory(initializer);
-        using var client = factory.CreateClient();
+        await using var host = await CreateHostAsync(initializer);
         await initializer.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         // Act
-        using var liveResponse = await client.GetAsync("/health/live");
-        using var readyResponse = await client.GetAsync("/health/ready");
+        using var liveResponse = await host.Client.GetAsync("/health/live");
+        using var readyResponse = await host.Client.GetAsync("/health/ready");
 
         // Assert
         Assert.Equal(HttpStatusCode.OK, liveResponse.StatusCode);
@@ -33,15 +31,15 @@ public sealed class StartupReadinessEndpointTests
     {
         // Arrange
         var initializer = new BlockingStartupInitializer();
-        using var factory = CreateFactory(initializer);
-        using var client = factory.CreateClient();
+        await using var host = await CreateHostAsync(initializer);
         await initializer.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
 
         // Act
         initializer.Complete();
-        var readinessState = factory.Services.GetRequiredService<StartupReadinessState>();
-        await readinessState.WaitUntilReadyAsync(new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token);
-        using var response = await client.GetAsync("/health/ready");
+        var readinessState = host.Services.GetRequiredService<StartupReadinessState>();
+        using var cancellationSource = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await readinessState.WaitUntilReadyAsync(cancellationSource.Token);
+        using var response = await host.Client.GetAsync("/health/ready");
 
         // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);
@@ -52,11 +50,10 @@ public sealed class StartupReadinessEndpointTests
     {
         // Arrange
         var initializer = new FailingStartupInitializer();
-        using var factory = CreateFactory(initializer);
-        using var client = factory.CreateClient();
+        await using var host = await CreateHostAsync(initializer);
         await initializer.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
-        var readinessState = factory.Services.GetRequiredService<StartupReadinessState>();
-        var applicationLifetime = factory.Services.GetRequiredService<IHostApplicationLifetime>();
+        var readinessState = host.Services.GetRequiredService<StartupReadinessState>();
+        var applicationLifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
 
         // Act
         initializer.Fail();
@@ -76,14 +73,14 @@ public sealed class StartupReadinessEndpointTests
         // Arrange
         var initializer = new SuccessfulStartupInitializer();
         var runtimeDependency = new ToggleableRuntimeHealthCheck();
-        using var factory = CreateFactory(initializer, runtimeDependency);
-        using var client = factory.CreateClient();
-        var readinessState = factory.Services.GetRequiredService<StartupReadinessState>();
-        await readinessState.WaitUntilReadyAsync(new CancellationTokenSource(TimeSpan.FromSeconds(5)).Token);
+        await using var host = await CreateHostAsync(initializer, runtimeDependency);
+        var readinessState = host.Services.GetRequiredService<StartupReadinessState>();
+        using var cancellationSource = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await readinessState.WaitUntilReadyAsync(cancellationSource.Token);
         runtimeDependency.IsHealthy = false;
 
         // Act
-        using var response = await client.GetAsync("/health/ready");
+        using var response = await host.Client.GetAsync("/health/ready");
 
         // Assert
         Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
@@ -93,27 +90,22 @@ public sealed class StartupReadinessEndpointTests
 
     #region Test helpers
 
-    private static WebApplicationFactory<Program> CreateFactory(
+    private static Task<PulseFlowComponentTestHost> CreateHostAsync(
         IStartupInitializer initializer,
         ToggleableRuntimeHealthCheck? runtimeDependency = null)
     {
-        var factory = new PulseFlowWebApplicationFactory<Program>(
-            "Host=localhost;Database=pulseflow_tests;Username=postgres;Password=postgres");
-
-        return factory.WithWebHostBuilder(builder =>
+        return PulseFlowComponentTestHost.StartAsync(services =>
         {
-            builder.ConfigureServices(services =>
-            {
-                services.AddSingleton<IStartupInitializer>(initializer);
+            services.AddStartupInitialization();
+            services.AddSingleton(initializer);
 
-                if(runtimeDependency is not null)
-                {
-                    services.AddSingleton(runtimeDependency);
-                    services.AddHealthChecks().AddCheck<ToggleableRuntimeHealthCheck>(
-                        "test-runtime-dependency",
-                        tags: ["ready"]);
-                }
-            });
+            if (runtimeDependency is not null)
+            {
+                services.AddSingleton(runtimeDependency);
+                services.AddHealthChecks().AddCheck<ToggleableRuntimeHealthCheck>(
+                    "test-runtime-dependency",
+                    tags: ["ready"]);
+            }
         });
     }
 

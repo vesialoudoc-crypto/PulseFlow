@@ -9,12 +9,10 @@ public sealed class LivenessEndpointTests
     public async Task GetLiveness_ProcessIsRunning_ReturnsOk()
     {
         // Arrange
-        using var factory = new PulseFlowWebApplicationFactory<Program>(
-            "Host=localhost;Database=pulseflow_tests;Username=postgres;Password=postgres");
-        using var client = factory.CreateClient();
+        await using var host = await PulseFlowComponentTestHost.StartAsync(_ => { });
 
         // Act
-        using var response = await client.GetAsync("/health/live");
+        using var response = await host.Client.GetAsync("/health/live");
 
         // Assert
         Assert.Equal(HttpStatusCode.OK, response.StatusCode);

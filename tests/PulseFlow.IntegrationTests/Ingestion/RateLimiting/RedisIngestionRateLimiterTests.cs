@@ -1,8 +1,6 @@
 using System.Net;
 using System.Text;
-using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Logging.Abstractions;
 using Microsoft.Extensions.Options;
 using PulseFlow.Api.Ingestion.Messaging;
@@ -31,7 +29,7 @@ public sealed class RedisIngestionRateLimiterTests : IClassFixture<RedisFixture>
 
     public async Task DisposeAsync()
     {
-        if(_connectionMultiplexer is not null)
+        if (_connectionMultiplexer is not null)
         {
             await _connectionMultiplexer.GetDatabase().KeyDeleteAsync(GlobalKey);
             _connectionMultiplexer.Dispose();
@@ -98,17 +96,15 @@ public sealed class RedisIngestionRateLimiterTests : IClassFixture<RedisFixture>
     {
         // Arrange
         var publisher = new RecordingIngestionBatchPublisher();
-        using var apiAFactory = CreateApiFactory(publisher);
-        using var apiBFactory = CreateApiFactory(publisher);
-        using var apiAClient = apiAFactory.CreateClient();
-        using var apiBClient = apiBFactory.CreateClient();
+        await using var apiAHost = await CreateApiHostAsync(publisher);
+        await using var apiBHost = await CreateApiHostAsync(publisher);
 
         // Act
-        using var firstResponse = await PostEventsAsync(apiAClient);
-        using var secondResponse = await PostEventsAsync(apiBClient);
-        using var thirdResponse = await PostEventsAsync(apiAClient);
-        using var fourthResponse = await PostEventsAsync(apiBClient);
-        using var fifthResponse = await PostEventsAsync(apiAClient);
+        using var firstResponse = await PostEventsAsync(apiAHost.Client);
+        using var secondResponse = await PostEventsAsync(apiBHost.Client);
+        using var thirdResponse = await PostEventsAsync(apiAHost.Client);
+        using var fourthResponse = await PostEventsAsync(apiBHost.Client);
+        using var fifthResponse = await PostEventsAsync(apiAHost.Client);
 
         // Assert
         Assert.All(
@@ -121,22 +117,23 @@ public sealed class RedisIngestionRateLimiterTests : IClassFixture<RedisFixture>
 
     #region Test helpers
 
-    private WebApplicationFactory<Program> CreateApiFactory(
-        IIngestionBatchPublisher publisher)
+    private Task<PulseFlowComponentTestHost> CreateApiHostAsync(IIngestionBatchPublisher publisher)
     {
-        var factory = new PulseFlowWebApplicationFactory<Program>(
-            "Host=localhost;Database=pulseflow_tests;Username=postgres;Password=postgres",
-            _fixture.ConnectionString,
-            requestLimit: 4,
-            windowDuration: TimeSpan.FromMinutes(1));
-
-        return factory.WithWebHostBuilder(builder =>
+        return PulseFlowComponentTestHost.StartAsync(services =>
         {
-            builder.ConfigureServices(services =>
-            {
-                services.RemoveAll<IIngestionBatchPublisher>();
-                services.AddSingleton(publisher);
-            });
+            // Each host owns its own multiplexer, matching independent API process lifetimes.
+            services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(_fixture.ConnectionString));
+            services.AddSingleton<IOptions<IngestionRateLimitOptions>>(
+                Options.Create(
+                    new IngestionRateLimitOptions
+                    {
+                        RequestLimit = 4,
+                        WindowDuration = TimeSpan.FromMinutes(1),
+                    }
+                )
+            );
+            services.AddSingleton<IIngestionRateLimiter, RedisIngestionRateLimiter>();
+            services.AddSingleton(publisher);
         });
     }
 
@@ -165,8 +162,9 @@ public sealed class RedisIngestionRateLimiterTests : IClassFixture<RedisFixture>
                 new IngestionRateLimitOptions
                 {
                     RequestLimit = requestLimit,
-                    WindowDuration = windowDuration
-                }),
+                    WindowDuration = windowDuration,
+                }
+            ),
             NullLogger<RedisIngestionRateLimiter>.Instance
         );
     }
