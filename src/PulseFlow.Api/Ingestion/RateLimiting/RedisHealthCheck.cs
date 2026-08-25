@@ -26,12 +26,7 @@ public sealed class RedisHealthCheck : IHealthCheck
             await connectionMultiplexer.GetDatabase().PingAsync().WaitAsync(ct);
             return HealthCheckResult.Healthy();
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            _logger.LogWarning("Redis readiness check timed out.");
-            return HealthCheckResult.Unhealthy("Redis is unavailable.");
-        }
-        catch (Exception exception)
+        catch (Exception exception) when (exception is not OperationCanceledException)
         {
             _logger.LogError(exception, "Redis readiness check failed.");
             return HealthCheckResult.Unhealthy("Redis is unavailable.");

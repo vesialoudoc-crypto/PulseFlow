@@ -35,11 +35,15 @@ public sealed class RedisStartupInitializer : IStartupInitializer
         _ = _serviceProvider.GetRequiredService<IIngestionRateLimiter>();
         try
         {
-            await connectionMultiplexer.GetDatabase().PingAsync().WaitAsync(_options.AsyncTimeout, ct);
+            await connectionMultiplexer.GetDatabase().PingAsync().WaitAsync(ct);
         }
-        catch (TimeoutException)
+        catch (RedisTimeoutException exception)
         {
-            _logger.LogWarning("Redis startup ping timed out after {ConfiguredTimeout}.", _options.AsyncTimeout);
+            _logger.LogWarning(
+                exception,
+                "Redis startup ping timed out after {ConfiguredTimeout}.",
+                _options.AsyncTimeout
+            );
             throw;
         }
     }

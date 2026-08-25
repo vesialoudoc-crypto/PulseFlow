@@ -6,6 +6,10 @@ public sealed class RabbitMqOptions
 {
     public const string SectionName = "RabbitMq";
 
+    // CancellationTokenSource.CancelAfter and the RabbitMQ.Client timer-backed timeouts
+    // are kept within the project's safe timer deadline range.
+    public static readonly TimeSpan MaximumTimeout = TimeSpan.FromMilliseconds(int.MaxValue);
+
     [Required]
     public string QueueName { get; init; } = string.Empty;
 

@@ -16,13 +16,6 @@ public sealed class RedisIngestionRateLimiter : IIngestionRateLimiter
     public RedisIngestionRateLimiter(
         IConnectionMultiplexer connectionMultiplexer,
         IOptions<IngestionRateLimitOptions> options,
-        ILogger<RedisIngestionRateLimiter> logger
-    )
-        : this(connectionMultiplexer, options, Options.Create(new RedisOptions()), logger) { }
-
-    public RedisIngestionRateLimiter(
-        IConnectionMultiplexer connectionMultiplexer,
-        IOptions<IngestionRateLimitOptions> options,
         IOptions<RedisOptions> redisOptions,
         ILogger<RedisIngestionRateLimiter> logger
     )
@@ -49,7 +42,7 @@ public sealed class RedisIngestionRateLimiter : IIngestionRateLimiter
                     keys: [GlobalKey],
                     values: [_options.RequestLimit, GetWindowDurationMilliseconds()]
                 )
-                .WaitAsync(_redisOptions.AsyncTimeout, ct);
+                .WaitAsync(ct);
 
             // Lua returns two values:
             // { 1, ttl } -> allowed
@@ -77,9 +70,10 @@ public sealed class RedisIngestionRateLimiter : IIngestionRateLimiter
                 TimeSpan.FromMilliseconds(remainingTtlMilliseconds)
             );
         }
-        catch (TimeoutException)
+        catch (RedisTimeoutException exception)
         {
             _logger.LogWarning(
+                exception,
                 "Redis rate-limit operation timed out after {ConfiguredTimeout}.",
                 _redisOptions.AsyncTimeout
             );

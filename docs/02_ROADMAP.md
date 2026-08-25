@@ -493,13 +493,16 @@ message-size limits, parsing in the HTTP API, or infrastructure limits.
 
 The explicit dependency-timeout slice is also implemented through component-owned
 options. PostgreSQL uses Npgsql connection and command timeouts; RabbitMQ uses
-RabbitMQ.Client connection, handshake, and continuation timeouts plus local token-based
-deadlines for topology, publisher-channel, and publish calls; Redis uses
-StackExchange.Redis connect and async timeouts plus a bounded `WaitAsync` for the
-rate-limit script. `Startup` owns one linked budget for the complete startup sequence,
-and `HealthChecks` sets built-in readiness-registration timeouts. Redis rate-limit
-timeout fails closed as HTTP 503 without publishing; RabbitMQ publish timeout cannot
-return HTTP 202; startup timeout makes readiness failed and stops startup. See
+RabbitMQ.Client connection, handshake, and continuation timeouts plus validated local
+token-based deadlines for topology, publisher-slot wait/creation, and publish calls;
+Redis uses StackExchange.Redis connect and async timeouts, with `WaitAsync` only for
+caller cancellation. RabbitMQ's fixed publisher slots discard uncertain channels,
+remain recoverable for later batches without retrying the earlier batch, and make
+readiness unhealthy if none are usable. `Startup` owns one linked budget for the
+complete startup sequence, and `HealthChecks` sets built-in readiness-registration
+timeouts. Redis rate-limit timeout fails closed as HTTP 503 without publishing;
+RabbitMQ publish timeout cannot return HTTP 202; startup timeout makes readiness failed
+and stops startup. See
 [ADR 0020](decisions/0020-use-explicit-dependency-timeout-budgets.md).
 
 ## Deferred Portfolio and Production Coverage

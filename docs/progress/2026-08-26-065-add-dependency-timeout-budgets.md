@@ -21,17 +21,27 @@ or caller cancellation.
   Topology declaration, publisher-channel creation, and publish/confirmation create a
   linked cancellation token directly beside the RabbitMQ operation and pass it to the
   client API without a second `WaitAsync` wrapper.
-- Configured StackExchange.Redis `ConnectTimeout` and `AsyncTimeout`. The rate-limit
-  script and startup `PING` use bounded `WaitAsync` because their Redis API has no
-  per-command cancellation-token parameter; this bounds local waiting without claiming
-  that an already-sent Redis command is physically cancelled.
+- Configured StackExchange.Redis `ConnectTimeout` and `AsyncTimeout`. StackExchange.Redis
+  3.1.13 reports an overdue asynchronous operation as `RedisTimeoutException`, so the
+  rate-limit script and startup `PING` use `WaitAsync` only for caller cancellation;
+  this does not claim that an already-sent Redis command is physically cancelled.
 - Added the readiness budget to PostgreSQL, RabbitMQ, and Redis health-check
   registrations.
 - Made a timed-out Redis rate-limit operation return the existing unavailable result,
   preserving HTTP 503 before request-body reading or publishing.
-- Made a timed-out RabbitMQ publish discard its channel and propagate failure, so the
-  endpoint cannot return HTTP 202; the existing safe HTTP 500 response hides internal
-  details.
+- Reworked the RabbitMQ publisher into a fixed `PublisherChannelCount` slot pool. A
+  timed-out, cancelled, or failed publish discards its uncertain channel and returns an
+  empty slot. A later request can create a bounded replacement for its own batch only;
+  the prior uncertain batch is never retried. RabbitMQ readiness is unhealthy when no
+  usable publisher channel remains.
+- Added positive and safe-upper-bound startup validation for all RabbitMQ timeouts;
+  `TopologyDeclarationTimeout`, `PublisherChannelTimeout`, and
+  `PublishConfirmationTimeout` are therefore valid for `CancelAfter` before runtime.
+- Removed the PostgreSQL and Redis health-check cancellation catches. Framework
+  registration timeouts are handled by `DefaultHealthCheckService`, while external
+  caller cancellation now propagates instead of being logged as a dependency timeout.
+- Removed the production default-options constructors from `EfCoreEventChunkStore` and
+  `RedisIngestionRateLimiter`; test construction passes explicit options.
 - Applied one overall startup budget. Expiration marks readiness failed and propagates
   a startup error; host shutdown remains normal cancellation.
 - Restored exception-object logging in the global exception handler and parser
@@ -55,7 +65,7 @@ operational starting values rather than measured targets.
 
 - `dotnet csharpier check .` passed.
 - `dotnet build PulseFlow.slnx -warnaserror` passed with 0 warnings and 0 errors.
-- `pwsh ./scripts/test.ps1` passed: 114 unit tests and 63 integration tests.
+- `pwsh ./scripts/test.ps1` passed: 131 unit tests and 64 integration tests.
 - `pwsh ./scripts/check-project-docs.ps1` passed.
 - `git diff --check` passed with no whitespace errors.
 

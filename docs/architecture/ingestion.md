@@ -218,14 +218,16 @@ policies is not automated in this project slice.
 The manager creates the publisher and consumer channels and disposes the connection
 after its dependent messaging resources have stopped.
 
-The singleton `RabbitMqIngestionBatchPublisher` owns a publisher-confirmation-enabled
-channel. It serializes access with `SemaphoreSlim`, sets persistent
-`application/x-ndjson` message properties, and publishes the exact raw body to the
-configured queue through RabbitMQ's default exchange. The RabbitMQ client's automatic
-recovery remains at its default enabled setting; this cleanup adds no custom retry or
-reconnection behavior. A failed publication still faults the publisher task and reaches
-the HTTP exception boundary. This is the local, minimum Step 2 topology and lifecycle
-choice rather than a final topology or delivery guarantee.
+The singleton `RabbitMqIngestionBatchPublisher` owns a fixed pool of
+publisher-confirmation-enabled slots equal to `PublisherChannelCount`. A slot is leased
+exclusively for one publish and contains either a usable channel or an empty state. It
+sets persistent `application/x-ndjson` message properties and publishes the exact raw
+body to the configured queue through RabbitMQ's default exchange. The RabbitMQ
+client's automatic recovery remains at its default enabled setting; this cleanup adds
+no custom retry or reconnection behavior. A failed publication still faults the
+publisher task and reaches the HTTP exception boundary. This is the local, minimum
+Step 2 topology and lifecycle choice rather than a final topology or delivery
+guarantee.
 
 HTTP `202 Accepted` with no body is returned only after that publisher task completes
 successfully. Consequently, it means RabbitMQ confirmed publication of the raw batch,
@@ -235,11 +237,15 @@ other unhandled failures continue to use the existing centralized HTTP 500 Probl
 Details boundary, with no `202` response.
 
 RabbitMQ.Client uses configured provider-native connection, handshake, and continuation
-timeouts. Publisher-channel creation and publication each use a component-local linked
-cancellation token because their RabbitMQ.Client APIs accept a token. A publish or
-confirmation timeout disposes the leased channel rather than returning it to the pool,
-faults the publisher task, and therefore follows the same safe HTTP 500 Problem Details
-boundary without exposing RabbitMQ internals.
+timeouts. RabbitMQ validates every timeout as positive and no greater than
+`Int32.MaxValue` milliseconds before startup; this is the safe maximum for the
+timer-based deadlines used by RabbitMQ.Client and `CancelAfter`. Publisher-slot wait
+and channel creation share the component-owned `PublisherChannelTimeout`, while
+publish/confirmation uses the separate `PublishConfirmationTimeout`. A publish timeout,
+caller cancellation, or publish failure disposes the uncertain channel and returns its
+now-empty slot to the pool. The next request can create a bounded replacement in that
+slot for its own batch only; it never retries the prior batch. When all slots are empty,
+RabbitMQ readiness is unhealthy even if the shared broker connection remains open.
 
 The implemented dependency graph and lifetimes are:
 
@@ -424,11 +430,12 @@ counter. It returns the decision and remaining TTL. The limiter maps an allowed 
 an exceeded result with `RetryAfter`, or an unavailable result when the Redis operation
 fails. There is no retry, lock, cache, or local fallback counter.
 
-Redis configures provider-native `ConnectTimeout` and `AsyncTimeout`. The rate-limit
-script uses `WaitAsync` with the same `AsyncTimeout` and its caller token because the
-StackExchange.Redis API does not accept a per-command cancellation token. This bounds
-the API's wait but does not guarantee physical cancellation of a script already sent to
-Redis. A timeout is classified as an unavailable limiter result, so
+Redis configures provider-native `ConnectTimeout` and `AsyncTimeout`. In
+StackExchange.Redis 3.1.13, `AsyncTimeout` completes an overdue asynchronous command
+with `RedisTimeoutException`, so the rate-limit script and startup `PING` use
+`WaitAsync` only for caller cancellation. That local cancellation wait does not
+guarantee physical cancellation of a script already sent to Redis. A provider timeout
+is classified as an unavailable limiter result, so
 `EventsController` returns HTTP 503 and does not read the request body or call the
 RabbitMQ publisher.
 

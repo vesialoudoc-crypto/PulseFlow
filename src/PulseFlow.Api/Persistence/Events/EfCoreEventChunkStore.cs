@@ -14,9 +14,6 @@ public sealed class EfCoreEventChunkStore : IEventChunkStore
     private readonly PulseFlowDbContext _dbContext;
     private readonly PostgreSqlOptions _options;
 
-    public EfCoreEventChunkStore(PulseFlowDbContext dbContext)
-        : this(dbContext, Options.Create(new PostgreSqlOptions())) { }
-
     public EfCoreEventChunkStore(PulseFlowDbContext dbContext, IOptions<PostgreSqlOptions> options)
     {
         _dbContext = dbContext;

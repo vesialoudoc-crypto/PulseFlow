@@ -76,6 +76,140 @@ public sealed class RabbitMqIngestionBatchPublisherTests
     }
 
     [Fact]
+    public async Task PublishAsync_PublishTimesOut_DisposesUncertainChannel()
+    {
+        // Arrange
+        var channelFactory = new ScriptedPublisherChannelFactory();
+        channelFactory.EnqueueChannel(PublishOutcome.BlockUntilCanceled);
+        await using var publisher = CreatePublisher(channelFactory);
+        await publisher.InitializeAsync(CancellationToken.None);
+
+        // Act
+        await Assert.ThrowsAsync<TimeoutException>(() =>
+            publisher.PublishAsync("timed-out-batch"u8.ToArray(), CancellationToken.None));
+
+        // Assert
+        Assert.True(channelFactory.CreatedChannels.Single().Disposed);
+        Assert.False(publisher.HasUsableChannel);
+    }
+
+    [Fact]
+    public async Task PublishAsync_UncertainPublish_DoesNotReuseChannelOrRetryBatch()
+    {
+        // Arrange
+        var channelFactory = new ScriptedPublisherChannelFactory();
+        channelFactory.EnqueueChannel(PublishOutcome.BlockUntilCanceled);
+        channelFactory.EnqueueChannel(PublishOutcome.Succeed);
+        await using var publisher = CreatePublisher(channelFactory);
+        await publisher.InitializeAsync(CancellationToken.None);
+
+        // Act
+        await Assert.ThrowsAsync<TimeoutException>(() =>
+            publisher.PublishAsync("first-batch"u8.ToArray(), CancellationToken.None));
+        await publisher.PublishAsync("second-batch"u8.ToArray(), CancellationToken.None);
+
+        // Assert
+        Assert.Equal(2, channelFactory.CreatedChannels.Count);
+        Assert.Equal(1, channelFactory.CreatedChannels[0].PublishCount);
+        Assert.Equal(1, channelFactory.CreatedChannels[1].PublishCount);
+        Assert.True(channelFactory.CreatedChannels[0].Disposed);
+        Assert.False(channelFactory.CreatedChannels[1].Disposed);
+    }
+
+    [Fact]
+    public async Task PublishAsync_RepeatedTimeouts_LeavesSlotRecoverableForLaterPublish()
+    {
+        // Arrange
+        var channelFactory = new ScriptedPublisherChannelFactory();
+        channelFactory.EnqueueChannel(PublishOutcome.BlockUntilCanceled);
+        channelFactory.EnqueueChannel(PublishOutcome.BlockUntilCanceled);
+        channelFactory.EnqueueChannel(PublishOutcome.Succeed);
+        await using var publisher = CreatePublisher(channelFactory);
+        await publisher.InitializeAsync(CancellationToken.None);
+
+        // Act
+        await Assert.ThrowsAsync<TimeoutException>(() => publisher.PublishAsync(ReadOnlyMemory<byte>.Empty, CancellationToken.None));
+        await Assert.ThrowsAsync<TimeoutException>(() => publisher.PublishAsync(ReadOnlyMemory<byte>.Empty, CancellationToken.None));
+        await publisher.PublishAsync(ReadOnlyMemory<byte>.Empty, CancellationToken.None);
+
+        // Assert
+        Assert.Equal(3, channelFactory.CreatedChannels.Count);
+        Assert.Equal(1, channelFactory.CreatedChannels[2].PublishCount);
+        Assert.True(publisher.HasUsableChannel);
+    }
+
+    [Fact]
+    public async Task PublishAsync_CallerCancellation_DoesNotRetryBatchAndLeavesSlotRecoverable()
+    {
+        // Arrange
+        var channelFactory = new ScriptedPublisherChannelFactory();
+        channelFactory.EnqueueChannel(PublishOutcome.BlockUntilCanceled);
+        channelFactory.EnqueueChannel(PublishOutcome.Succeed);
+        await using var publisher = CreatePublisher(channelFactory);
+        await publisher.InitializeAsync(CancellationToken.None);
+        using var cancellationSource = new CancellationTokenSource(TimeSpan.FromMilliseconds(25));
+
+        // Act
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            publisher.PublishAsync("cancelled-batch"u8.ToArray(), cancellationSource.Token));
+        await publisher.PublishAsync("later-batch"u8.ToArray(), CancellationToken.None);
+
+        // Assert
+        Assert.Equal(cancellationSource.Token, exception.CancellationToken);
+        Assert.Equal(1, channelFactory.CreatedChannels[0].PublishCount);
+        Assert.Equal(1, channelFactory.CreatedChannels[1].PublishCount);
+        Assert.True(publisher.HasUsableChannel);
+    }
+
+    [Fact]
+    public async Task PublishAsync_ReplacementCreationFails_LeavesSlotRecoverableForLaterPublish()
+    {
+        // Arrange
+        var channelFactory = new ScriptedPublisherChannelFactory();
+        channelFactory.EnqueueChannel(PublishOutcome.BlockUntilCanceled);
+        channelFactory.EnqueueFailure(new InvalidOperationException("Replacement channel creation failed."));
+        channelFactory.EnqueueChannel(PublishOutcome.Succeed);
+        await using var publisher = CreatePublisher(channelFactory);
+        await publisher.InitializeAsync(CancellationToken.None);
+
+        // Act
+        await Assert.ThrowsAsync<TimeoutException>(() => publisher.PublishAsync(ReadOnlyMemory<byte>.Empty, CancellationToken.None));
+        await Assert.ThrowsAsync<InvalidOperationException>(() => publisher.PublishAsync(ReadOnlyMemory<byte>.Empty, CancellationToken.None));
+        await publisher.PublishAsync(ReadOnlyMemory<byte>.Empty, CancellationToken.None);
+
+        // Assert
+        Assert.Equal(2, channelFactory.CreatedChannels.Count);
+        Assert.Equal(1, channelFactory.CreateFailureCount);
+        Assert.True(publisher.HasUsableChannel);
+    }
+
+    [Fact]
+    public async Task CheckHealthAsync_AllPublisherChannelsAreUncertain_ReturnsUnhealthy()
+    {
+        // Arrange
+        var channelFactory = new ScriptedPublisherChannelFactory();
+        channelFactory.EnqueueChannel(PublishOutcome.BlockUntilCanceled);
+        await using var publisher = CreatePublisher(channelFactory);
+        await publisher.InitializeAsync(CancellationToken.None);
+        await Assert.ThrowsAsync<TimeoutException>(() => publisher.PublishAsync(ReadOnlyMemory<byte>.Empty, CancellationToken.None));
+        var connectionManager = new RabbitMqConnectionManager(
+            "amqp://guest:guest@localhost:5672/",
+            new RabbitMqOptions { QueueName = "test-queue" },
+            NullLogger<RabbitMqConnectionManager>.Instance);
+        var connection = DispatchProxy.Create<IConnection, OpenRabbitMqConnection>();
+        typeof(RabbitMqConnectionManager)
+            .GetField("_connection", BindingFlags.Instance | BindingFlags.NonPublic)!
+            .SetValue(connectionManager, connection);
+        var healthCheck = new RabbitMqHealthCheck(connectionManager, publisher);
+
+        // Act
+        var result = await healthCheck.CheckHealthAsync(new Microsoft.Extensions.Diagnostics.HealthChecks.HealthCheckContext());
+
+        // Assert
+        Assert.Equal(Microsoft.Extensions.Diagnostics.HealthChecks.HealthStatus.Unhealthy, result.Status);
+    }
+
+    [Fact]
     public async Task DisposeAsync_InitializedPublisher_DisposesEveryPooledChannel()
     {
         // Arrange
@@ -195,6 +329,117 @@ public sealed class RabbitMqIngestionBatchPublisherTests
         {
             Disposed = true;
             return ValueTask.CompletedTask;
+        }
+    }
+
+    private static RabbitMqIngestionBatchPublisher CreatePublisher(ScriptedPublisherChannelFactory channelFactory)
+    {
+        return new RabbitMqIngestionBatchPublisher(
+            channelFactory.CreateChannelAsync,
+            new RabbitMqOptions
+            {
+                QueueName = "test-queue",
+                PublisherChannelCount = 1,
+                PublisherChannelTimeout = TimeSpan.FromMilliseconds(100),
+                PublishConfirmationTimeout = TimeSpan.FromMilliseconds(25),
+            },
+            NullLogger<RabbitMqIngestionBatchPublisher>.Instance);
+    }
+
+    private enum PublishOutcome
+    {
+        Succeed,
+        BlockUntilCanceled,
+    }
+
+    private sealed class ScriptedPublisherChannelFactory
+    {
+        private readonly Queue<Func<ValueTask<IChannel>>> _channelCreations = new();
+
+        public List<ScriptedPublisherChannel> CreatedChannels { get; } = [];
+
+        public int CreateFailureCount { get; private set; }
+
+        public void EnqueueChannel(PublishOutcome outcome)
+        {
+            _channelCreations.Enqueue(() =>
+            {
+                var channel = DispatchProxy.Create<IChannel, ScriptedPublisherChannel>();
+                var channelProxy = (ScriptedPublisherChannel)(object)channel;
+                channelProxy.Initialize(outcome);
+                CreatedChannels.Add(channelProxy);
+                return ValueTask.FromResult(channel);
+            });
+        }
+
+        public void EnqueueFailure(Exception exception)
+        {
+            _channelCreations.Enqueue(() =>
+            {
+                CreateFailureCount++;
+                return ValueTask.FromException<IChannel>(exception);
+            });
+        }
+
+        public ValueTask<IChannel> CreateChannelAsync(
+            CreateChannelOptions channelOptions,
+            CancellationToken cancellationToken)
+        {
+            return _channelCreations.Dequeue().Invoke();
+        }
+    }
+
+    private class ScriptedPublisherChannel : DispatchProxy
+    {
+        private PublishOutcome _outcome;
+
+        public bool Disposed { get; private set; }
+
+        public int PublishCount { get; private set; }
+
+        public void Initialize(PublishOutcome outcome)
+        {
+            _outcome = outcome;
+        }
+
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? arguments)
+        {
+            return targetMethod?.Name switch
+            {
+                "BasicPublishAsync" => new ValueTask(PublishAsync(arguments!.OfType<CancellationToken>().Single())),
+                "DisposeAsync" => Dispose(),
+                _ => throw new NotSupportedException($"Unexpected channel call: {targetMethod?.Name}."),
+            };
+        }
+
+        private Task PublishAsync(CancellationToken cancellationToken)
+        {
+            PublishCount++;
+
+            return _outcome switch
+            {
+                PublishOutcome.Succeed => Task.CompletedTask,
+                PublishOutcome.BlockUntilCanceled => Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken),
+                _ => throw new InvalidOperationException("Unsupported publish outcome."),
+            };
+        }
+
+        private ValueTask Dispose()
+        {
+            Disposed = true;
+            return ValueTask.CompletedTask;
+        }
+    }
+
+    private class OpenRabbitMqConnection : DispatchProxy
+    {
+        protected override object? Invoke(MethodInfo? targetMethod, object?[]? arguments)
+        {
+            return targetMethod?.Name switch
+            {
+                "get_IsOpen" => true,
+                _ => throw new NotSupportedException($"Unexpected connection call: {targetMethod?.Name}."),
+            };
         }
     }
 

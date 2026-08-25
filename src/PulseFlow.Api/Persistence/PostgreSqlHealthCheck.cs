@@ -23,12 +23,7 @@ public sealed class PostgreSqlHealthCheck : IHealthCheck
 
             return canConnect ? HealthCheckResult.Healthy() : HealthCheckResult.Unhealthy("PostgreSQL is unavailable.");
         }
-        catch (OperationCanceledException) when (ct.IsCancellationRequested)
-        {
-            _logger.LogWarning("PostgreSQL readiness check timed out.");
-            return HealthCheckResult.Unhealthy("PostgreSQL is unavailable.");
-        }
-        catch (Exception exception)
+        catch (Exception exception) when (exception is not OperationCanceledException)
         {
             _logger.LogError(exception, "PostgreSQL readiness check failed.");
             return HealthCheckResult.Unhealthy("PostgreSQL is unavailable.");

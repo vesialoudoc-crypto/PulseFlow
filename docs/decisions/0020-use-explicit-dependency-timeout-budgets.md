@@ -32,17 +32,32 @@ executor.
 PostgreSQL uses Npgsql's connection and command timeouts. EF Core receives the command
 timeout, and the manually created `NpgsqlCommand` receives the same explicit timeout.
 RabbitMQ.Client uses its connection, handshake, and continuation timeout settings. Its
-topology declaration, publisher-channel creation, and publish/confirmation calls take
-their own directly-created linked cancellation token because those APIs accept one.
-Redis configures `ConnectTimeout` and `AsyncTimeout`; the rate-limit script uses
-`WaitAsync(AsyncTimeout, callerToken)` because StackExchange.Redis does not accept a
-per-command cancellation token. This bounds caller waiting but does not claim to cancel
-an already-sent Redis command.
+topology declaration, publisher-channel wait/creation, and publish/confirmation calls
+take their own directly-created linked cancellation token because those APIs accept
+one. All RabbitMQ timeout values are positive and at most `Int32.MaxValue`
+milliseconds, the project's safe timer-deadline maximum; this validates the values
+passed to `CancellationTokenSource.CancelAfter` before the application starts.
+
+The publisher pool has exactly `PublisherChannelCount` reusable slots. A slot holds a
+confirmation channel or is empty. An uncertain publish outcome (timeout, caller
+cancellation, or publish failure) disposes its channel and returns the empty slot to
+the pool. A later request may create a replacement within `PublisherChannelTimeout`;
+that replacement serves only the later request and never retries the batch with the
+uncertain outcome. If no usable channel remains, RabbitMQ readiness is unhealthy even
+when the broker connection itself is open.
+
+Redis configures `ConnectTimeout` and `AsyncTimeout`. StackExchange.Redis 3.1.13
+uses `AsyncTimeout` to fault an overdue asynchronous command with
+`RedisTimeoutException`, so the rate-limit script and startup `PING` use `WaitAsync`
+only with the caller token. That local cancellation wait does not physically cancel an
+already-sent Redis command.
 
 `StartupInitializationService` creates one linked cancellation token for its complete
 initialization sequence. Health-check registrations use ASP.NET Core's built-in timeout
-property. Caller or host cancellation is checked before internal timeout handling and
-remains normal cancellation.
+property. `DefaultHealthCheckService` converts a registration timeout into a failed
+health entry; health checks do not catch `OperationCanceledException`, so an external
+caller cancellation propagates out of the readiness request. Caller or host
+cancellation remains normal cancellation.
 
 The configured initial budgets are:
 
@@ -64,13 +79,14 @@ dependency checks they invoke use the readiness budget.
 
 ## Consequences
 
-- Provider-native settings own PostgreSQL, RabbitMQ connection, and Redis connection
+- Provider-native settings own PostgreSQL, RabbitMQ connection, and Redis operation
   timing; local cancellation is used only where an API needs an additional operation
-  deadline.
+  deadline or must observe caller cancellation.
 - Normal client aborts and host shutdown remain cancellation, rather than dependency
   failures, and do not mark startup as failed.
-- A timed-out RabbitMQ publisher channel is discarded rather than returned to the
-  pool, avoiding reuse after an uncertain publish result.
+- A timed-out, cancelled, or failed RabbitMQ publisher channel is discarded rather
+  than reused. Its fixed pool slot remains available for a bounded, later replacement,
+  preserving capacity without automatically retrying the original batch.
 - The budgets are initial operational values, not measured latency targets. They can
   be adjusted through configuration after observation without changing public HTTP
   contracts.

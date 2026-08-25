@@ -29,12 +29,18 @@ public static class IngestionMessagingServiceCollectionExtensions
             .Validate(
                 options =>
                     options.ConnectionTimeout > TimeSpan.Zero
+                    && options.ConnectionTimeout <= RabbitMqOptions.MaximumTimeout
                     && options.HandshakeTimeout > TimeSpan.Zero
+                    && options.HandshakeTimeout <= RabbitMqOptions.MaximumTimeout
                     && options.ContinuationTimeout > TimeSpan.Zero
+                    && options.ContinuationTimeout <= RabbitMqOptions.MaximumTimeout
                     && options.TopologyDeclarationTimeout > TimeSpan.Zero
+                    && options.TopologyDeclarationTimeout <= RabbitMqOptions.MaximumTimeout
                     && options.PublisherChannelTimeout > TimeSpan.Zero
-                    && options.PublishConfirmationTimeout > TimeSpan.Zero,
-                "Every RabbitMq timeout must be greater than zero."
+                    && options.PublisherChannelTimeout <= RabbitMqOptions.MaximumTimeout
+                    && options.PublishConfirmationTimeout > TimeSpan.Zero
+                    && options.PublishConfirmationTimeout <= RabbitMqOptions.MaximumTimeout,
+                $"Every RabbitMq timeout must be greater than zero and no more than {int.MaxValue} milliseconds."
             )
             .ValidateOnStart();
 

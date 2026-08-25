@@ -1,4 +1,5 @@
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using PulseFlow.Api.Ingestion.Contracts;
 using PulseFlow.Api.Ingestion.Validation;
 using PulseFlow.Api.Persistence;
@@ -45,7 +46,7 @@ public sealed class EfCoreEventChunkStoreTests : IClassFixture<PostgreSqlFixture
         };
         await using var writeContext = CreateDbContext();
         await writeContext.Database.MigrateAsync();
-        var store = new EfCoreEventChunkStore(writeContext);
+        var store = CreateStore(writeContext);
         var earliestExpectedReceivedAt = DateTime.UtcNow.AddMilliseconds(-1);
 
         // Act
@@ -109,7 +110,7 @@ public sealed class EfCoreEventChunkStoreTests : IClassFixture<PostgreSqlFixture
             eventId));
         await using var writeContext = CreateDbContext();
         await writeContext.Database.MigrateAsync();
-        var store = new EfCoreEventChunkStore(writeContext);
+        var store = CreateStore(writeContext);
 
         // Act
         await store.StoreAsync(new[] { envelope });
@@ -141,7 +142,7 @@ public sealed class EfCoreEventChunkStoreTests : IClassFixture<PostgreSqlFixture
             eventId));
         await using var writeContext = CreateDbContext();
         await writeContext.Database.MigrateAsync();
-        var store = new EfCoreEventChunkStore(writeContext);
+        var store = CreateStore(writeContext);
 
         // Act
         await store.StoreAsync(new[] { firstEnvelope, secondEnvelope });
@@ -174,8 +175,8 @@ public sealed class EfCoreEventChunkStoreTests : IClassFixture<PostgreSqlFixture
 
         await using var firstContext = CreateDbContext();
         await using var secondContext = CreateDbContext();
-        var firstStore = new EfCoreEventChunkStore(firstContext);
-        var secondStore = new EfCoreEventChunkStore(secondContext);
+        var firstStore = CreateStore(firstContext);
+        var secondStore = CreateStore(secondContext);
 
         // Act
         await Task.WhenAll(
@@ -198,6 +199,11 @@ public sealed class EfCoreEventChunkStoreTests : IClassFixture<PostgreSqlFixture
             .Options;
 
         return new PulseFlowDbContext(options);
+    }
+
+    private static EfCoreEventChunkStore CreateStore(PulseFlowDbContext dbContext)
+    {
+        return new EfCoreEventChunkStore(dbContext, Options.Create(new PostgreSqlOptions()));
     }
 
     private static string CreateRecordJson(
