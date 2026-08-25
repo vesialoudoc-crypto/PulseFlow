@@ -134,12 +134,14 @@ match the existing code:
 - `ConnectionStrings:RabbitMq` for RabbitMQ connection information and credentials;
 - `RabbitMq:QueueName`, `RabbitMq:ConsumerCount`, and
   `RabbitMq:PublisherChannelCount` for RabbitMQ runtime settings;
-- `Ingestion:ChunkCapacity` for ingestion runtime configuration;
+- `Ingestion:ChunkCapacity` and `Ingestion:MaxBatchBytes` for ingestion runtime
+  configuration;
 - `IngestionRateLimit:RequestLimit` and `IngestionRateLimit:WindowDuration` for the
   distributed ingestion quota.
 
-Connection information, RabbitMQ credentials, and ingestion settings must not be
-baked into the image or committed to the repository.
+Connection information and RabbitMQ credentials must not be baked into the image or
+committed to the repository. Deployment-specific ingestion settings must be supplied
+as runtime configuration; the repository retains only non-secret default values.
 
 ## Current API and consumer coupling
 

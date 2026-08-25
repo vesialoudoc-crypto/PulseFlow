@@ -21,11 +21,7 @@ if (connectionString is null)
 builder.Services.AddPulseFlowHttpApplication();
 builder.Services.AddStartupInitialization();
 
-builder
-    .Services.AddOptions<IngestionOptions>()
-    .Bind(builder.Configuration.GetSection(IngestionOptions.SectionName))
-    .ValidateDataAnnotations()
-    .ValidateOnStart();
+builder.Services.AddIngestionOptions(builder.Configuration);
 
 builder.Services.AddPulseFlowPersistence(connectionString);
 

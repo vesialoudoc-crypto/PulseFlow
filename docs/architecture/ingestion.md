@@ -174,10 +174,19 @@ The generation decision is recorded in
 ## HTTP and application composition
 
 The implemented public boundary is `POST /api/events`, exposed by an ASP.NET Core
-controller and restricted to `application/x-ndjson`. The controller copies the
-complete request body as raw bytes and passes those bytes to
+controller and restricted to `application/x-ndjson`. The controller reads the raw
+request body into one bounded buffer and passes its exact filled range to
 `IIngestionBatchPublisher`; it does not invoke `NdjsonRecordReader`,
 `EventEnvelopeValidator`, `IngestEventsHandler`, or PostgreSQL persistence.
+
+`Ingestion:MaxBatchBytes` is a startup-validated positive `long` with a configured
+default of 10 MiB and a 100 MiB hard configuration cap. If `Content-Length` exceeds
+the configured limit, the controller returns HTTP 413 Problem Details before it reads
+the body or allocates the payload buffer. It does not trust a lower or absent
+`Content-Length`: it reads at most the configured byte count and one probe byte, then
+returns the same HTTP 413 response without publishing when that probe finds excess
+data. A body exactly at the limit is accepted. Request-abort cancellation propagates
+without being remapped to HTTP 413 or HTTP 500.
 
 Application composition calls `builder.Services.AddIngestionMessaging(builder.Configuration)`.
 The extension validates RabbitMQ options and keeps RabbitMQ.Client primitives inside
@@ -208,8 +217,9 @@ choice rather than a final topology or delivery guarantee.
 HTTP `202 Accepted` with no body is returned only after that publisher task completes
 successfully. Consequently, it means RabbitMQ confirmed publication of the raw batch,
 not that any record was parsed, validated, or persisted. Unsupported media types
-return HTTP 415. Publisher and other unhandled failures continue to use the existing
-centralized HTTP 500 Problem Details boundary, with no `202` response.
+return HTTP 415, oversized batches return HTTP 413 Problem Details, and publisher and
+other unhandled failures continue to use the existing centralized HTTP 500 Problem
+Details boundary, with no `202` response.
 
 The implemented dependency graph and lifetimes are:
 
@@ -238,8 +248,8 @@ the parser consumer per RabbitMQ delivery.
 `GlobalExceptionHandler` is registered through ASP.NET Core exception-handler
 middleware with Problem Details. Status-code pages provide Problem Details for
 otherwise body-less error statuses. First-party ASP.NET Core OpenAPI generation
-documents the route, streaming NDJSON request body, and 202, 415, and 500 responses.
-Swagger UI points to the generated document in Development only.
+documents the route, streaming NDJSON request body, and 202, 413, 415, and 500
+responses. Swagger UI points to the generated document in Development only.
 
 ## Test composition
 
@@ -470,7 +480,7 @@ topology, create publisher channels, or subscribe parser workers.
 
 ## Not yet defined
 
-- record, upload, and record-count limits;
+- record, record-count, and RabbitMQ message-size limits;
 - compression;
 - authentication and authorization;
 - automatic dead-letter redrive and a client retry policy beyond preserving `eventId`;

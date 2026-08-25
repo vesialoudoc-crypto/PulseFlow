@@ -60,6 +60,9 @@ the dead-letter queue.
 - The API publishes the complete raw batch to RabbitMQ without parsing records.
 - HTTP `202 Accepted` means RabbitMQ confirmed raw-batch publication. It does not
   report validation, duplicate, or persistence outcomes.
+- The request body must not exceed the configured `Ingestion:MaxBatchBytes` value.
+  An oversized body returns HTTP `413 Payload Too Large` Problem Details and is not
+  published to RabbitMQ.
 - Unsupported media type returns HTTP `415 Problem Details`; publisher and other
   unhandled failures return HTTP `500 Problem Details` without internal details.
 
@@ -67,5 +70,5 @@ the dead-letter queue.
 
 - It does not promise exactly-once RabbitMQ delivery or exactly-once processing.
 - Clients and sources must retain and reuse `eventId` when resending the same event.
-- Maximum sizes, unknown envelope properties, authentication, batch status, automatic
-  dead-letter redrive, and retry policy remain outside this contract.
+- Unknown envelope properties, authentication, batch status, automatic dead-letter
+  redrive, and retry policy remain outside this contract.

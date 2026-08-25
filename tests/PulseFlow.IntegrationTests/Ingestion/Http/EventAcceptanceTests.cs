@@ -1,8 +1,10 @@
 using System.Net;
 using System.Net.Http.Json;
 using System.Text;
+using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.DependencyInjection;
+using PulseFlow.Api.Ingestion;
 using PulseFlow.Api.Ingestion.Messaging;
 using PulseFlow.Api.Ingestion.RateLimiting;
 using PulseFlow.IntegrationTests.Infrastructure;
@@ -26,6 +28,74 @@ public sealed class EventAcceptanceTests
 
         // Assert
         Assert.Equal(expectedBatch, publisher.PublishedBatch);
+    }
+
+    [Fact]
+    public async Task PostEvents_PayloadSmallerThanLimit_ReturnsAccepted()
+    {
+        // Arrange
+        var expectedBatch = CreatePayload(7);
+        var publisher = new RecordingIngestionBatchPublisher();
+        await using var host = await CreateHostAsync(publisher, maxBatchBytes: 8);
+        using var content = CreateNdjsonContent(expectedBatch);
+
+        // Act
+        using var response = await host.Client.PostAsync("/api/events", content);
+
+        // Assert
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        Assert.Equal(expectedBatch, publisher.PublishedBatch);
+    }
+
+    [Fact]
+    public async Task PostEvents_PayloadAtLimit_ReturnsAccepted()
+    {
+        // Arrange
+        var expectedBatch = CreatePayload(8);
+        var publisher = new RecordingIngestionBatchPublisher();
+        await using var host = await CreateHostAsync(publisher, maxBatchBytes: expectedBatch.Length);
+        using var content = CreateNdjsonContent(expectedBatch);
+
+        // Act
+        using var response = await host.Client.PostAsync("/api/events", content);
+
+        // Assert
+        Assert.Equal(HttpStatusCode.Accepted, response.StatusCode);
+        Assert.Equal(expectedBatch, publisher.PublishedBatch);
+    }
+
+    [Fact]
+    public async Task PostEvents_ContentLengthExceedsLimit_ReturnsPayloadTooLargeProblemDetails()
+    {
+        // Arrange
+        var publisher = new RecordingIngestionBatchPublisher();
+        await using var host = await CreateHostAsync(publisher, maxBatchBytes: 8);
+        using var content = CreateNdjsonContent(CreatePayload(9));
+
+        // Act
+        using var response = await host.Client.PostAsync("/api/events", content);
+        var problemDetails = await response.Content.ReadFromJsonAsync<ProblemDetails>();
+
+        // Assert
+        AssertPayloadTooLargeProblem(response, problemDetails);
+        Assert.Equal(0, publisher.PublishCallCount);
+    }
+
+    [Fact]
+    public async Task PostEvents_UnknownLengthPayloadExceedsLimit_ReturnsPayloadTooLargeProblemDetails()
+    {
+        // Arrange
+        var publisher = new RecordingIngestionBatchPublisher();
+        await using var host = await CreateHostAsync(publisher, maxBatchBytes: 8);
+        using var request = CreateChunkedNdjsonRequest(CreatePayload(9));
+
+        // Act
+        using var response = await host.Client.SendAsync(request);
+        var problemDetails = await response.Content.ReadFromJsonAsync<ProblemDetails>();
+
+        // Assert
+        AssertPayloadTooLargeProblem(response, problemDetails);
+        Assert.Equal(0, publisher.PublishCallCount);
     }
 
     [Fact]
@@ -147,7 +217,8 @@ public sealed class EventAcceptanceTests
 
     private static Task<PulseFlowComponentTestHost> CreateHostAsync(
         IIngestionBatchPublisher publisher,
-        IIngestionRateLimiter? rateLimiter = null)
+        IIngestionRateLimiter? rateLimiter = null,
+        long maxBatchBytes = IngestionOptions.DefaultMaxBatchBytes)
     {
         return PulseFlowComponentTestHost.StartAsync(services =>
         {
@@ -156,7 +227,7 @@ public sealed class EventAcceptanceTests
                 rateLimiter
                 ?? new FixedIngestionRateLimiter(
                     new IngestionRateLimitResult(IngestionRateLimitStatus.Allowed)));
-        });
+        }, maxBatchBytes);
     }
 
     private static ByteArrayContent CreateNdjsonContent(byte[] batch)
@@ -166,6 +237,31 @@ public sealed class EventAcceptanceTests
             "application/x-ndjson");
 
         return content;
+    }
+
+    private static HttpRequestMessage CreateChunkedNdjsonRequest(byte[] batch)
+    {
+        var content = new UnknownLengthNdjsonContent(batch);
+        var request = new HttpRequestMessage(HttpMethod.Post, "/api/events") { Content = content };
+        request.Headers.TransferEncodingChunked = true;
+
+        return request;
+    }
+
+    private static void AssertPayloadTooLargeProblem(HttpResponseMessage response, ProblemDetails? problemDetails)
+    {
+        Assert.Equal(HttpStatusCode.RequestEntityTooLarge, response.StatusCode);
+        Assert.Equal("application/problem+json", response.Content.Headers.ContentType?.MediaType);
+        Assert.NotNull(problemDetails);
+        Assert.Equal(StatusCodes.Status413PayloadTooLarge, problemDetails.Status);
+        Assert.Equal("Payload Too Large", problemDetails.Title);
+        Assert.Equal("The request body exceeds the maximum allowed batch size.", problemDetails.Detail);
+        Assert.True(problemDetails.Extensions.ContainsKey("traceId"));
+    }
+
+    private static byte[] CreatePayload(int length)
+    {
+        return Enumerable.Range(0, length).Select(index => (byte)index).ToArray();
     }
 
     private sealed class RecordingIngestionBatchPublisher : IIngestionBatchPublisher
@@ -206,6 +302,29 @@ public sealed class EventAcceptanceTests
         public Task<IngestionRateLimitResult> TryAllowAsync(CancellationToken ct)
         {
             return Task.FromResult(_result);
+        }
+    }
+
+    private sealed class UnknownLengthNdjsonContent : HttpContent
+    {
+        private readonly byte[] _batch;
+
+        public UnknownLengthNdjsonContent(byte[] batch)
+        {
+            _batch = batch;
+            Headers.ContentType = new System.Net.Http.Headers.MediaTypeHeaderValue("application/x-ndjson");
+        }
+
+        protected override Task SerializeToStreamAsync(Stream stream, TransportContext? context)
+        {
+            return stream.WriteAsync(_batch, CancellationToken.None).AsTask();
+        }
+
+        protected override bool TryComputeLength(out long length)
+        {
+            length = 0;
+
+            return false;
         }
     }
 
