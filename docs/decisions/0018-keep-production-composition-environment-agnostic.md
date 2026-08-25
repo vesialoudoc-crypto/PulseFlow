@@ -34,10 +34,13 @@ Production composition is environment-agnostic. `AddPulseFlowPersistence`,
 startup initialization, readiness, health-check, and hosted-service components.
 Production code contains no test-specific hosted service or dependency-selection branch.
 
-`AddPulseFlowHttpApplication` and `UsePulseFlowHttpApplication` own the reusable
-controller, exception handling, Problem Details, status-code handling, OpenAPI, HTTPS,
-and health-endpoint composition. The only environment-sensitive behavior is exposing
-OpenAPI and Swagger UI in `Development`; it does not alter dependency registrations.
+`AddPulseFlowHttpApplication` and `UsePulseFlowHttpApplication` own the reusable HTTP
+composition: controllers, exception handling, Problem Details, status-code handling,
+OpenAPI, HTTPS, and health-endpoint mapping. Startup initialization remains a separate
+application-lifecycle registration: `Program` adds it for production and readiness
+tests add it explicitly when their scenario requires it. The only environment-sensitive
+behavior is exposing OpenAPI and Swagger UI in `Development`; it does not alter
+dependency registrations.
 
 Component/API tests use the test-project-local `PulseFlowComponentTestHost`. It applies
 the production HTTP composition to an in-memory `TestServer` but never starts

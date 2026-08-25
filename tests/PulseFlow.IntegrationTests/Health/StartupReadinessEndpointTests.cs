@@ -96,6 +96,7 @@ public sealed class StartupReadinessEndpointTests
     {
         return PulseFlowComponentTestHost.StartAsync(services =>
         {
+            services.AddStartupInitialization();
             services.AddSingleton(initializer);
 
             if (runtimeDependency is not null)

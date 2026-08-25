@@ -1,7 +1,6 @@
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.OpenApi;
 using PulseFlow.Api.Health;
-using PulseFlow.Api.Startup;
 
 namespace PulseFlow.Api.Http;
 
@@ -10,7 +9,6 @@ public static class PulseFlowHttpApplicationExtensions
     public static IServiceCollection AddPulseFlowHttpApplication(this IServiceCollection services)
     {
         services.AddControllers();
-        services.AddStartupInitialization();
         services.AddPulseFlowHealthChecks();
         services.AddProblemDetails();
         services.AddExceptionHandler<GlobalExceptionHandler>();

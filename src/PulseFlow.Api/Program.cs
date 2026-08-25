@@ -19,6 +19,7 @@ if (connectionString is null)
 }
 
 builder.Services.AddPulseFlowHttpApplication();
+builder.Services.AddStartupInitialization();
 
 builder
     .Services.AddOptions<IngestionOptions>()
