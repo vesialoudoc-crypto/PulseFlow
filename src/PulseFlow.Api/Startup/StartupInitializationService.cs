@@ -60,6 +60,7 @@ public sealed class StartupInitializationService : BackgroundService
                 "Mandatory startup initialization failed in {StartupComponentType}.",
                 activeComponentType ?? exception.GetType().FullName ?? exception.GetType().Name
             );
+            throw;
         }
     }
 }

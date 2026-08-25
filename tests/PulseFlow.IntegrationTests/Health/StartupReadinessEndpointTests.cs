@@ -1,6 +1,7 @@
 using Microsoft.AspNetCore.Mvc.Testing;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
+using Microsoft.Extensions.Hosting;
 using PulseFlow.Api.Startup;
 using PulseFlow.IntegrationTests.Infrastructure;
 using System.Net;
@@ -47,21 +48,26 @@ public sealed class StartupReadinessEndpointTests
     }
 
     [Fact]
-    public async Task GetHealthEndpoints_MandatoryInitializerFails_ReturnsLiveOkAndReadyServiceUnavailable()
+    public async Task StartupInitializationService_MandatoryInitializerFails_MarksFailedAndStopsHost()
     {
         // Arrange
         var initializer = new FailingStartupInitializer();
         using var factory = CreateFactory(initializer);
         using var client = factory.CreateClient();
-        await initializer.Attempted.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        await initializer.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var readinessState = factory.Services.GetRequiredService<StartupReadinessState>();
+        var applicationLifetime = factory.Services.GetRequiredService<IHostApplicationLifetime>();
 
         // Act
-        using var liveResponse = await client.GetAsync("/health/live");
-        using var readyResponse = await client.GetAsync("/health/ready");
+        initializer.Fail();
+        await Task.WhenAny(
+            Task.Delay(Timeout.InfiniteTimeSpan, applicationLifetime.ApplicationStopping),
+            Task.Delay(TimeSpan.FromSeconds(5))
+        );
 
         // Assert
-        Assert.Equal(HttpStatusCode.OK, liveResponse.StatusCode);
-        Assert.Equal(HttpStatusCode.ServiceUnavailable, readyResponse.StatusCode);
+        Assert.Equal(StartupReadinessStatus.Failed, readinessState.Status);
+        Assert.True(applicationLifetime.ApplicationStopping.IsCancellationRequested);
     }
 
     [Fact]
@@ -131,12 +137,19 @@ public sealed class StartupReadinessEndpointTests
 
     private sealed class FailingStartupInitializer : IStartupInitializer
     {
-        public TaskCompletionSource Attempted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+        private readonly TaskCompletionSource _failure = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource Started { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public Task InitializeAsync(CancellationToken cancellationToken)
         {
-            Attempted.TrySetResult();
-            return Task.FromException(new InvalidOperationException("Startup initializer test failure."));
+            Started.TrySetResult();
+            return _failure.Task.WaitAsync(cancellationToken);
+        }
+
+        public void Fail()
+        {
+            _failure.TrySetException(new InvalidOperationException("Startup initializer test failure."));
         }
     }
 

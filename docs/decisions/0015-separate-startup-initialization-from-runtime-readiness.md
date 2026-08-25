@@ -32,8 +32,10 @@ Use a singleton, awaitable `StartupReadinessState` with `Starting`, `Ready`, and
 `Failed` states. A `StartupInitializationService` runs registered
 `IStartupInitializer` implementations sequentially once per process start. It marks
 the state ready only after all initializers and the parser-consumer subscription
-participant finish successfully. Initialization failure is logged with the failing
-component type and leaves readiness unhealthy while the process remains live.
+participant finish successfully. A mandatory initializer or readiness-participant
+failure is recorded in the state, logged with the failing component type, and then
+propagated through normal `BackgroundService` host-failure semantics so the instance
+stops.
 
 RabbitMQ topology and publisher-channel-pool setup, Redis multiplexer creation plus
 `PING` and limiter script loading, and PostgreSQL connectivity plus pending-migration
@@ -54,8 +56,9 @@ initializers.
   report their completed RabbitMQ subscriptions before the instance becomes ready.
 - A runtime dependency outage makes readiness return HTTP 503 while startup state stays
   `Ready`; global initialization is not rerun automatically.
-- Startup failures are not retried by this slice. Restart or retry policy remains a
-  separate operational decision.
+- This slice has no in-process startup retry or backoff. A mandatory startup failure
+  stops the instance; the deployment or container restart policy is responsible for a
+  subsequent process-start attempt.
 
 ## Explicit limitations
 
