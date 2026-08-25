@@ -2,6 +2,8 @@ using System.Net;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
+using Microsoft.Extensions.Options;
+using PulseFlow.Api.Health;
 using PulseFlow.Api.Startup;
 using PulseFlow.IntegrationTests.Infrastructure;
 
@@ -68,6 +70,28 @@ public sealed class StartupReadinessEndpointTests
     }
 
     [Fact]
+    public async Task StartupInitializationService_InitializationExceedsTimeout_MarksFailedAndStopsHost()
+    {
+        // Arrange
+        var initializer = new BlockingStartupInitializer();
+        var timeoutOptions = new StartupOptions { InitializationTimeout = TimeSpan.FromMilliseconds(25) };
+        await using var host = await CreateHostAsync(initializer, timeoutOptions: timeoutOptions);
+        await initializer.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+        var readinessState = host.Services.GetRequiredService<StartupReadinessState>();
+        var applicationLifetime = host.Services.GetRequiredService<IHostApplicationLifetime>();
+
+        // Act
+        await Task.WhenAny(
+            Task.Delay(Timeout.InfiniteTimeSpan, applicationLifetime.ApplicationStopping),
+            Task.Delay(TimeSpan.FromSeconds(5)));
+
+        // Assert
+        Assert.Equal(StartupReadinessStatus.Failed, readinessState.Status);
+        Assert.IsType<TimeoutException>(readinessState.Failure);
+        Assert.True(applicationLifetime.ApplicationStopping.IsCancellationRequested);
+    }
+
+    [Fact]
     public async Task GetReady_RuntimeDependencyFailsAfterStartup_ReturnsServiceUnavailableWithoutRerunningInitializers()
     {
         // Arrange
@@ -88,16 +112,46 @@ public sealed class StartupReadinessEndpointTests
         Assert.Equal(1, initializer.InitializeCallCount);
     }
 
+    [Fact]
+    public async Task GetReady_RuntimeHealthCheckExceedsReadinessTimeout_ReturnsServiceUnavailable()
+    {
+        // Arrange
+        var initializer = new SuccessfulStartupInitializer();
+        var runtimeDependency = new BlockingRuntimeHealthCheck();
+        var readinessOptions = new ReadinessOptions { Timeout = TimeSpan.FromMilliseconds(25) };
+        await using var host = await CreateHostAsync(
+            initializer,
+            blockingRuntimeDependency: runtimeDependency,
+            readinessOptions: readinessOptions);
+        var readinessState = host.Services.GetRequiredService<StartupReadinessState>();
+        using var cancellationSource = new CancellationTokenSource(TimeSpan.FromSeconds(5));
+        await readinessState.WaitUntilReadyAsync(cancellationSource.Token);
+
+        // Act
+        using var response = await host.Client.GetAsync("/health/ready").WaitAsync(TimeSpan.FromSeconds(5));
+
+        // Assert
+        Assert.Equal(HttpStatusCode.ServiceUnavailable, response.StatusCode);
+    }
+
     #region Test helpers
 
     private static Task<PulseFlowComponentTestHost> CreateHostAsync(
         IStartupInitializer initializer,
-        ToggleableRuntimeHealthCheck? runtimeDependency = null)
+        ToggleableRuntimeHealthCheck? runtimeDependency = null,
+        StartupOptions? timeoutOptions = null,
+        BlockingRuntimeHealthCheck? blockingRuntimeDependency = null,
+        ReadinessOptions? readinessOptions = null)
     {
         return PulseFlowComponentTestHost.StartAsync(services =>
         {
             services.AddStartupInitialization();
             services.AddSingleton(initializer);
+
+            if (timeoutOptions is not null)
+            {
+                services.AddSingleton<IOptions<StartupOptions>>(Options.Create(timeoutOptions));
+            }
 
             if (runtimeDependency is not null)
             {
@@ -105,6 +159,15 @@ public sealed class StartupReadinessEndpointTests
                 services.AddHealthChecks().AddCheck<ToggleableRuntimeHealthCheck>(
                     "test-runtime-dependency",
                     tags: ["ready"]);
+            }
+
+            if (blockingRuntimeDependency is not null)
+            {
+                services.AddSingleton(blockingRuntimeDependency);
+                services.AddHealthChecks().AddCheck<BlockingRuntimeHealthCheck>(
+                    "blocking-runtime-dependency",
+                    tags: ["ready"],
+                    timeout: readinessOptions?.Timeout ?? new ReadinessOptions().Timeout);
             }
         });
     }
@@ -166,6 +229,17 @@ public sealed class StartupReadinessEndpointTests
         {
             var result = IsHealthy ? HealthCheckResult.Healthy() : HealthCheckResult.Unhealthy();
             return Task.FromResult(result);
+        }
+    }
+
+    private sealed class BlockingRuntimeHealthCheck : IHealthCheck
+    {
+        public async Task<HealthCheckResult> CheckHealthAsync(
+            HealthCheckContext context,
+            CancellationToken ct = default)
+        {
+            await Task.Delay(Timeout.InfiniteTimeSpan, ct);
+            return HealthCheckResult.Healthy();
         }
     }
 

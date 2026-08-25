@@ -139,7 +139,7 @@ public sealed class EventAcceptanceTests
     }
 
     [Fact]
-    public async Task PostEvents_RateLimitUnavailable_ReturnsServiceUnavailableAndDoesNotPublish()
+    public async Task PostEvents_RedisRateLimitTimeoutReturnsUnavailable_ReturnsServiceUnavailableAndDoesNotPublish()
     {
         // Arrange
         var publisher = new RecordingIngestionBatchPublisher();
@@ -193,11 +193,11 @@ public sealed class EventAcceptanceTests
     }
 
     [Fact]
-    public async Task PostEvents_PublisherFails_ReturnsSafeInternalServerError()
+    public async Task PostEvents_RabbitMqPublishTimeout_ReturnsSafeInternalServerErrorInsteadOfAccepted()
     {
         // Arrange
         var publisher = new RecordingIngestionBatchPublisher(
-            new InvalidOperationException("Publisher test failure."));
+            new TimeoutException("RabbitMQ publish/confirmation timed out."));
         await using var host = await CreateHostAsync(publisher);
         using var content = CreateNdjsonContent(
             Encoding.UTF8.GetBytes("{\"type\":\"event\"}\n"));
@@ -210,7 +210,7 @@ public sealed class EventAcceptanceTests
         Assert.Equal(HttpStatusCode.InternalServerError, response.StatusCode);
         Assert.NotNull(problemDetails);
         Assert.Equal("An unexpected error occurred while processing the request.", problemDetails.Detail);
-        Assert.DoesNotContain("Publisher test failure.", problemDetails.Detail);
+        Assert.DoesNotContain("RabbitMQ", problemDetails.Detail);
     }
 
     #region Test helpers

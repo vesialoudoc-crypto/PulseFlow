@@ -22,4 +22,16 @@ public sealed class RabbitMqOptions
     [Range(1, int.MaxValue)]
     // This bounds concurrent publishing in one API process.
     public int PublisherChannelCount { get; init; } = 4;
+
+    public TimeSpan ConnectionTimeout { get; init; } = TimeSpan.FromSeconds(10);
+
+    public TimeSpan HandshakeTimeout { get; init; } = TimeSpan.FromSeconds(10);
+
+    public TimeSpan ContinuationTimeout { get; init; } = TimeSpan.FromSeconds(10);
+
+    public TimeSpan TopologyDeclarationTimeout { get; init; } = TimeSpan.FromSeconds(10);
+
+    public TimeSpan PublisherChannelTimeout { get; init; } = TimeSpan.FromSeconds(5);
+
+    public TimeSpan PublishConfirmationTimeout { get; init; } = TimeSpan.FromSeconds(5);
 }

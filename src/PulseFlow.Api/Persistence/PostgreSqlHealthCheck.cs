@@ -5,10 +5,12 @@ namespace PulseFlow.Api.Persistence;
 public sealed class PostgreSqlHealthCheck : IHealthCheck
 {
     private readonly IServiceScopeFactory _scopeFactory;
+    private readonly ILogger<PostgreSqlHealthCheck> _logger;
 
-    public PostgreSqlHealthCheck(IServiceScopeFactory scopeFactory)
+    public PostgreSqlHealthCheck(IServiceScopeFactory scopeFactory, ILogger<PostgreSqlHealthCheck> logger)
     {
         _scopeFactory = scopeFactory;
+        _logger = logger;
     }
 
     public async Task<HealthCheckResult> CheckHealthAsync(HealthCheckContext context, CancellationToken ct = default)
@@ -23,11 +25,13 @@ public sealed class PostgreSqlHealthCheck : IHealthCheck
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            throw;
+            _logger.LogWarning("PostgreSQL readiness check timed out.");
+            return HealthCheckResult.Unhealthy("PostgreSQL is unavailable.");
         }
         catch (Exception exception)
         {
-            return HealthCheckResult.Unhealthy("PostgreSQL is unavailable.", exception);
+            _logger.LogError(exception, "PostgreSQL readiness check failed.");
+            return HealthCheckResult.Unhealthy("PostgreSQL is unavailable.");
         }
     }
 }

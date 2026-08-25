@@ -10,7 +10,8 @@ public static class IngestionMessagingServiceCollectionExtensions
 {
     public static IServiceCollection AddIngestionMessaging(
         this IServiceCollection services,
-        IConfiguration configuration
+        IConfiguration configuration,
+        TimeSpan readinessCheckTimeout
     )
     {
         // Keep RabbitMQ configuration inside messaging setup, not in application code.
@@ -25,18 +26,30 @@ public static class IngestionMessagingServiceCollectionExtensions
             .AddOptions<RabbitMqOptions>()
             .Bind(configuration.GetRequiredSection(RabbitMqOptions.SectionName))
             .ValidateDataAnnotations()
+            .Validate(
+                options =>
+                    options.ConnectionTimeout > TimeSpan.Zero
+                    && options.HandshakeTimeout > TimeSpan.Zero
+                    && options.ContinuationTimeout > TimeSpan.Zero
+                    && options.TopologyDeclarationTimeout > TimeSpan.Zero
+                    && options.PublisherChannelTimeout > TimeSpan.Zero
+                    && options.PublishConfirmationTimeout > TimeSpan.Zero,
+                "Every RabbitMq timeout must be greater than zero."
+            )
             .ValidateOnStart();
 
         // One manager is shared so publisher and workers use one broker connection.
         services.AddSingleton<RabbitMqConnectionManager>(serviceProvider => new RabbitMqConnectionManager(
             rabbitMqConnectionString,
-            serviceProvider.GetRequiredService<IOptions<RabbitMqOptions>>().Value
+            serviceProvider.GetRequiredService<IOptions<RabbitMqOptions>>().Value,
+            serviceProvider.GetRequiredService<ILogger<RabbitMqConnectionManager>>()
         ));
 
         // The app sees only its publisher interface, not the RabbitMQ implementation.
         services.AddSingleton<RabbitMqIngestionBatchPublisher>(serviceProvider => new RabbitMqIngestionBatchPublisher(
             serviceProvider.GetRequiredService<RabbitMqConnectionManager>(),
-            serviceProvider.GetRequiredService<IOptions<RabbitMqOptions>>().Value
+            serviceProvider.GetRequiredService<IOptions<RabbitMqOptions>>().Value,
+            serviceProvider.GetRequiredService<ILogger<RabbitMqIngestionBatchPublisher>>()
         ));
         services.AddSingleton<IIngestionBatchPublisher>(serviceProvider =>
             serviceProvider.GetRequiredService<RabbitMqIngestionBatchPublisher>()
@@ -72,7 +85,9 @@ public static class IngestionMessagingServiceCollectionExtensions
         services.AddSingleton<IStartupReadinessParticipant>(serviceProvider =>
             serviceProvider.GetRequiredService<EventParserConsumer>()
         );
-        services.AddHealthChecks().AddCheck<RabbitMqHealthCheck>("rabbitmq", tags: ["ready"]);
+        services
+            .AddHealthChecks()
+            .AddCheck<RabbitMqHealthCheck>("rabbitmq", tags: ["ready"], timeout: readinessCheckTimeout);
         services.AddSingleton<IHostedService>(serviceProvider =>
             serviceProvider.GetRequiredService<EventParserConsumer>()
         );

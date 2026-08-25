@@ -11,15 +11,25 @@ public sealed class RedisIngestionRateLimiter : IIngestionRateLimiter
     private readonly IDatabase _database;
     private readonly IngestionRateLimitOptions _options;
     private readonly ILogger<RedisIngestionRateLimiter> _logger;
+    private readonly RedisOptions _redisOptions;
 
     public RedisIngestionRateLimiter(
         IConnectionMultiplexer connectionMultiplexer,
         IOptions<IngestionRateLimitOptions> options,
         ILogger<RedisIngestionRateLimiter> logger
     )
+        : this(connectionMultiplexer, options, Options.Create(new RedisOptions()), logger) { }
+
+    public RedisIngestionRateLimiter(
+        IConnectionMultiplexer connectionMultiplexer,
+        IOptions<IngestionRateLimitOptions> options,
+        IOptions<RedisOptions> redisOptions,
+        ILogger<RedisIngestionRateLimiter> logger
+    )
     {
         _database = connectionMultiplexer.GetDatabase();
         _options = options.Value;
+        _redisOptions = redisOptions.Value;
         _logger = logger;
     }
 
@@ -33,11 +43,13 @@ public sealed class RedisIngestionRateLimiter : IIngestionRateLimiter
             // keys[0]   -> Lua KEYS[1] = GlobalKey
             // values[0] -> Lua ARGV[1] = RequestLimit
             // values[1] -> Lua ARGV[2] = WindowDuration in milliseconds
-            var result = await _database.ScriptEvaluateAsync(
-                script: FixedWindowScript,
-                keys: new RedisKey[] { GlobalKey },
-                values: new RedisValue[] { _options.RequestLimit, GetWindowDurationMilliseconds() }
-            );
+            var result = await _database
+                .ScriptEvaluateAsync(
+                    script: FixedWindowScript,
+                    keys: [GlobalKey],
+                    values: [_options.RequestLimit, GetWindowDurationMilliseconds()]
+                )
+                .WaitAsync(_redisOptions.AsyncTimeout, ct);
 
             // Lua returns two values:
             // { 1, ttl } -> allowed
@@ -65,14 +77,22 @@ public sealed class RedisIngestionRateLimiter : IIngestionRateLimiter
                 TimeSpan.FromMilliseconds(remainingTtlMilliseconds)
             );
         }
-        catch (RedisException ex)
+        catch (TimeoutException)
         {
-            _logger.LogError(ex, "Redis rate limiter is unavailable.");
+            _logger.LogWarning(
+                "Redis rate-limit operation timed out after {ConfiguredTimeout}.",
+                _redisOptions.AsyncTimeout
+            );
             return new IngestionRateLimitResult(IngestionRateLimitStatus.Unavailable);
         }
-        catch (ObjectDisposedException ex)
+        catch (RedisException exception)
         {
-            _logger.LogError(ex, "Redis connection was disposed.");
+            _logger.LogError(exception, "Redis rate limiter is unavailable.");
+            return new IngestionRateLimitResult(IngestionRateLimitStatus.Unavailable);
+        }
+        catch (ObjectDisposedException exception)
+        {
+            _logger.LogError(exception, "Redis connection was disposed.");
             return new IngestionRateLimitResult(IngestionRateLimitStatus.Unavailable);
         }
     }

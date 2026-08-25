@@ -1,4 +1,5 @@
 using System.Reflection;
+using Microsoft.Extensions.Logging.Abstractions;
 using PulseFlow.Api.Ingestion.Messaging;
 using PulseFlow.Api.Ingestion.Messaging.RabbitMq;
 using RabbitMQ.Client;
@@ -18,7 +19,8 @@ public sealed class RabbitMqIngestionBatchPublisherTests
             {
                 QueueName = "test-queue",
                 PublisherChannelCount = 4,
-            });
+            },
+            NullLogger<RabbitMqIngestionBatchPublisher>.Instance);
         await publisher.InitializeAsync(CancellationToken.None);
         var firstFourPublishes = Enumerable.Range(0, 4)
             .Select(_ => publisher.PublishAsync(ReadOnlyMemory<byte>.Empty, CancellationToken.None))
@@ -30,12 +32,13 @@ public sealed class RabbitMqIngestionBatchPublisherTests
         var fifthPublish = publisher.PublishAsync(
             ReadOnlyMemory<byte>.Empty,
             fifthPublishCancellation.Token);
-        await Assert.ThrowsAnyAsync<OperationCanceledException>(() => fifthPublish);
+        var cancellationException = await Assert.ThrowsAnyAsync<OperationCanceledException>(() => fifthPublish);
         channelFactory.AllowPublishesToComplete();
         await Task.WhenAll(firstFourPublishes);
 
         // Assert
         Assert.Equal(4, channelFactory.CreatedChannels.Count);
+        Assert.Equal(fifthPublishCancellation.Token, cancellationException.CancellationToken);
         Assert.All(channelFactory.ChannelOptions, static options =>
         {
             Assert.True(options.PublisherConfirmationsEnabled);
@@ -49,6 +52,30 @@ public sealed class RabbitMqIngestionBatchPublisherTests
     }
 
     [Fact]
+    public async Task PublishAsync_PublishConfirmationExceedsInternalTimeout_ThrowsTimeoutException()
+    {
+        // Arrange
+        var channelFactory = new BlockingPublisherChannelFactory();
+        await using var publisher = new RabbitMqIngestionBatchPublisher(
+            channelFactory.CreateChannelAsync,
+            new RabbitMqOptions
+            {
+                QueueName = "test-queue",
+                PublisherChannelCount = 1,
+                PublishConfirmationTimeout = TimeSpan.FromMilliseconds(25),
+            },
+            NullLogger<RabbitMqIngestionBatchPublisher>.Instance);
+        await publisher.InitializeAsync(CancellationToken.None);
+
+        // Act
+        var exception = await Assert.ThrowsAsync<TimeoutException>(() =>
+            publisher.PublishAsync(ReadOnlyMemory<byte>.Empty, CancellationToken.None));
+
+        // Assert
+        Assert.Equal("RabbitMQ publish/confirmation timed out.", exception.Message);
+    }
+
+    [Fact]
     public async Task DisposeAsync_InitializedPublisher_DisposesEveryPooledChannel()
     {
         // Arrange
@@ -59,7 +86,8 @@ public sealed class RabbitMqIngestionBatchPublisherTests
             {
                 QueueName = "test-queue",
                 PublisherChannelCount = 4,
-            });
+            },
+            NullLogger<RabbitMqIngestionBatchPublisher>.Instance);
         await publisher.InitializeAsync(CancellationToken.None);
 
         // Act
@@ -108,7 +136,10 @@ public sealed class RabbitMqIngestionBatchPublisherTests
             _allowPublishesToComplete.TrySetResult();
         }
 
-        internal Task PublishAsync(BlockingPublisherChannel channel, bool mandatory)
+        internal Task PublishAsync(
+            BlockingPublisherChannel channel,
+            bool mandatory,
+            CancellationToken cancellationToken)
         {
             channel.StartPublish(mandatory);
 
@@ -117,7 +148,7 @@ public sealed class RabbitMqIngestionBatchPublisherTests
                 FourPublishesStarted.TrySetResult();
             }
 
-            return _allowPublishesToComplete.Task;
+            return _allowPublishesToComplete.Task.WaitAsync(cancellationToken);
         }
     }
 
@@ -148,7 +179,13 @@ public sealed class RabbitMqIngestionBatchPublisherTests
         {
             return targetMethod?.Name switch
             {
-                "BasicPublishAsync" => new ValueTask(_factory!.PublishAsync(this, (bool)arguments![2]!)),
+                "BasicPublishAsync" => new ValueTask(
+                    _factory!.PublishAsync(
+                        this,
+                        (bool)arguments![2]!,
+                        arguments.OfType<CancellationToken>().Single()
+                    )
+                ),
                 "DisposeAsync" => Dispose(),
                 _ => throw new NotSupportedException($"Unexpected channel call: {targetMethod?.Name}."),
             };
