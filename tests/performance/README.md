@@ -45,8 +45,10 @@ For every run, the runner:
    Multi) and RabbitMQ metrics ports (`15693` and `15694`), avoiding conflicts with
    the normal local stack's `5254` and `15692` ports. Single waits for its public
    `/health/ready` endpoint. Multi probes `/health/ready` on both `api-1` and `api-2`
-   through HAProxy's internal Compose network; one successful request through the
-   load-balanced public ingress is not considered proof that both replicas are ready.
+   through HAProxy's internal Compose network; both must return HTTP 200 in the same
+   readiness evaluation cycle. One successful request through the load-balanced public
+   ingress is not considered proof that both replicas are ready. Each readiness probe
+   has a one-second timeout within the overall two-minute startup deadline.
 3. Starts RabbitMQ backlog and container-resource sampling, then runs
    `ingestion-baseline.js` with k6 and saves the k6 summary.
 4. For Multi, records HAProxy log-derived counts proving measured client POST traffic

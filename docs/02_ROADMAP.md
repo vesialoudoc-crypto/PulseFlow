@@ -304,9 +304,11 @@ traffic only to replicas that have completed mandatory initialization and whose
 runtime dependencies are healthy. Before it starts samplers or fixed 10-second k6,
 `tests/performance/run.ps1` waits for `Single`'s API readiness endpoint or directly
 probes both `Multi` replicas' readiness endpoints through the internal Compose network.
-It does not use a synthetic ingestion POST, row deletion, Redis-key deletion, or an
-arbitrary sleep as its readiness mechanism. Multi also preserves HAProxy-log evidence
-that both replicas received measured client POST traffic. See
+Multi starts measurement only when both replicas return HTTP 200 in the same polling
+cycle; each probe has a one-second timeout within the two-minute overall startup
+deadline. It does not use a synthetic ingestion POST, row deletion, Redis-key deletion,
+or an arbitrary sleep as its readiness mechanism. Multi also preserves HAProxy-log
+evidence that both replicas received measured client POST traffic. See
 [ADR 0015](decisions/0015-separate-startup-initialization-from-runtime-readiness.md),
 [ADR 0016](decisions/0016-use-haproxy-for-local-multi-instance-api-ingress.md), and
 [ADR 0017](decisions/0017-warm-full-ingestion-path-before-performance-baseline.md)

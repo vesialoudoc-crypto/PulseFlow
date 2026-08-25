@@ -424,8 +424,10 @@ HTTP 503 from readiness while the startup state remains `Ready`.
 The performance runner uses readiness as the pre-measurement boundary before it starts
 samplers or k6. In Single, it polls the API's public `/health/ready` endpoint. In
 Multi, it uses HAProxy's internal Compose network to poll `/health/ready` on both
-`api-1` and `api-2`; it does not infer two-replica readiness from one success through
-the load-balanced public ingress. HAProxy itself actively health-checks
+`api-1` and `api-2`; both must return HTTP 200 in the same polling cycle. It does not
+retain a prior success or infer two-replica readiness from one success through the
+load-balanced public ingress. Every readiness probe has a one-second timeout, and the
+overall startup deadline remains two minutes. HAProxy itself actively health-checks
 `/health/ready`, retaining round-robin routing while excluding an alive but unready
 replica from client traffic. The runner records HAProxy log-derived measured POST
 counts for both replicas and fails a Multi run unless both received traffic.

@@ -71,6 +71,7 @@ $resourceServices = $topologyConfiguration.ResourceServices
 $readinessUri = "http://localhost:$($topologyConfiguration.IngressPort)/health/ready"
 $readinessPollInterval = [TimeSpan]::FromSeconds(2)
 $readinessTimeout = [TimeSpan]::FromMinutes(2)
+$readinessProbeTimeoutSeconds = 1
 $rabbitMqMetricsUri = "http://localhost:$($topologyConfiguration.RabbitMqMetricsPort)/metrics/detailed?family=queue_coarse_metrics"
 $expectedComposeServices = @($resourceServices + 'migrations' | Sort-Object)
 
@@ -432,7 +433,8 @@ try {
         Write-Host "Waiting for Single API readiness at '$readinessUri'..."
         while ($true) {
             try {
-                $response = Invoke-WebRequest -Uri $readinessUri -Method Get -SkipHttpErrorCheck
+                $response = Invoke-WebRequest -Uri $readinessUri -Method Get -SkipHttpErrorCheck `
+                    -TimeoutSec $readinessProbeTimeoutSeconds
                 if ($response.StatusCode -eq 200) {
                     Write-Host 'Single API is ready.'
                     break
@@ -465,33 +467,35 @@ try {
         # HAProxy over the internal Compose network rather than inferring readiness
         # from one load-balanced response at the public ingress.
         $multiReplicaServices = @('api-1', 'api-2')
-        $readyReplicaServices = [System.Collections.Generic.HashSet[string]]::new()
         Write-Host 'Waiting for Multi API replica readiness through the internal Compose network...'
 
-        while ($readyReplicaServices.Count -lt $multiReplicaServices.Count) {
+        while ($true) {
+            # A readiness result belongs only to this polling cycle. Starting the
+            # measurement requires both replicas to return HTTP 200 now, rather than
+            # combining a previous success from one replica with a later success from
+            # the other.
+            $readyReplicaServices = [System.Collections.Generic.List[string]]::new()
             foreach ($service in $multiReplicaServices) {
-                if ($readyReplicaServices.Contains($service)) {
-                    continue
-                }
-
                 & $dockerCommand.Source compose @composeFileArguments --project-name $composeProjectName exec -T haproxy `
-                    wget -q -O /dev/null "http://${service}:8080/health/ready" 2>$null
+                    wget -q -T $readinessProbeTimeoutSeconds -O /dev/null "http://${service}:8080/health/ready" 2>$null
                 if ($LASTEXITCODE -eq 0) {
-                    [void]$readyReplicaServices.Add($service)
-                    Write-Host "Multi API replica '$service' is ready."
+                    $readyReplicaServices.Add($service)
                 }
             }
 
-            if ($readyReplicaServices.Count -lt $multiReplicaServices.Count) {
-                if ([DateTime]::UtcNow -ge $readinessDeadline) {
-                    $unreadyReplicaServices = @(
-                        $multiReplicaServices | Where-Object { -not $readyReplicaServices.Contains($_) }
-                    )
-                    throw "Topology '$Topology' API replicas did not become ready within $($readinessTimeout.TotalMinutes) minutes: $($unreadyReplicaServices -join ', ')."
-                }
-
-                Start-Sleep -Seconds $readinessPollInterval.TotalSeconds
+            if ($readyReplicaServices.Count -eq $multiReplicaServices.Count) {
+                Write-Host 'Multi API replicas are ready in the same readiness evaluation cycle.'
+                break
             }
+
+            if ([DateTime]::UtcNow -ge $readinessDeadline) {
+                $unreadyReplicaServices = @(
+                    $multiReplicaServices | Where-Object { $_ -notin $readyReplicaServices }
+                )
+                throw "Topology '$Topology' API replicas did not become ready in the same readiness evaluation cycle within $($readinessTimeout.TotalMinutes) minutes: $($unreadyReplicaServices -join ', ')."
+            }
+
+            Start-Sleep -Seconds $readinessPollInterval.TotalSeconds
         }
     }
 

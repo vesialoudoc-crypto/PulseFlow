@@ -1,4 +1,6 @@
 # This root file keeps Docker commands simple: run them from the repository root.
-# The actual local development containers are defined in the included file.
+# The normal local entry point is the HAProxy-fronted Multi topology. Shared
+# dependencies and topology-specific services stay in their own reusable files.
 include:
   - ./infra/local/compose.yaml
+  - ./infra/local/compose.multi.yaml
