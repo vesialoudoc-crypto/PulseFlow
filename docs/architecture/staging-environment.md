@@ -176,11 +176,28 @@ new immutable API version selected
 
 Render's pre-deploy lifecycle phase is the preferred boundary for this operation. No
 API replica may independently run migrations at startup. The published final runtime
-image does not contain `dotnet-ef`, although the current Dockerfile has a separate
-`migrations` stage. Packaging and executing migrations is the immediate deployment
-implementation decision: an EF Core migration bundle or a dedicated immutable
-migration image/job derived from the same revision are possible approaches. Neither
-approach is selected or implemented here.
+image contains the normal API publish output and the EF Core migration bundle from the
+same source revision. The bundle is at `/app/migrations/pulseflow-migrations`; it is
+not a second OCI artifact or GHCR package. The Dockerfile retains its `migrations`
+stage because local Compose uses that stage's `dotnet ef database update` command.
+
+The future Render pre-deploy command is:
+
+```text
+/app/migrations/pulseflow-migrations --connection "$ConnectionStrings__PulseFlow"
+```
+
+Render supplies `ConnectionStrings__PulseFlow` as a runtime secret. The shell expands
+that environment variable and passes its value to the bundle's `--connection` option;
+the image contains neither a connection string nor a Render endpoint. The API keeps
+its normal `dotnet PulseFlow.Api.dll` entry point, so migration execution is an
+explicit pre-deploy action rather than normal API startup behavior.
+
+"Exactly once" here means one controlled pre-deploy migration execution before a
+rollout, not a claim of mathematically exactly-once database semantics. EF Core's
+migration history determines which migrations are already applied, so rerunning the
+bundle on a current database succeeds without applying schema changes. See
+[ADR 0019](../decisions/0019-use-ef-core-migration-bundle-in-api-image.md).
 
 Replacing `sha-old` with `sha-new` must not delete PostgreSQL data, RabbitMQ persistent
 data, or managed Redis merely because the API is redeployed. Destroying the complete
@@ -193,9 +210,8 @@ The next infrastructure-as-code task must create and configure the Render API
 service, managed PostgreSQL, Key Value storage, RabbitMQ service, and RabbitMQ
 persistent disk. It must also establish private connectivity, public API ingress,
 runtime configuration and secrets, `/health/ready`, immutable GHCR SHA-image
-selection, restricted operator access, and the migration execution mechanism.
+selection, restricted operator access, and the documented pre-deploy migration command.
 
 This decision does not deploy resources, add Terraform/OpenTofu, configure a Render
-account, implement automatic staging deployment, publish a migration image/bundle,
-extract a worker, change RabbitMQ prefetch or consumer count, run load tests, or
-change the local Compose topology.
+account, implement automatic staging deployment, extract a worker, change RabbitMQ
+prefetch or consumer count, run load tests, or change the local Compose topology.

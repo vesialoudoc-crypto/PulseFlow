@@ -425,7 +425,10 @@ The one-time startup operations are:
 
 - PostgreSQL: create a DI scope, verify connectivity, and fail when EF Core reports
   pending migrations. The API never calls `Database.Migrate`; Compose's `migrations`
-  service executes `dotnet ef database update` before the API starts.
+  service executes `dotnet ef database update` before the API starts. The final API
+  image also contains an explicit EF Core migration bundle for the accepted Render
+  pre-deploy lifecycle; it is not invoked during API startup. See
+  [ADR 0019](../decisions/0019-use-ef-core-migration-bundle-in-api-image.md).
 - RabbitMQ: create the shared connection, declare the existing application-owned
   topology, and create the bounded publisher-confirmation channel pool.
 - Redis: create the shared `IConnectionMultiplexer`, resolve the rate limiter so its

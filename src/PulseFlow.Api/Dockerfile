@@ -9,20 +9,28 @@ RUN dotnet publish src/PulseFlow.Api/PulseFlow.Api.csproj -c Release -o /app/pub
     && rm /app/publish/appsettings.Development.json
 
 
-#migrations
 FROM build AS migrations
 
 RUN dotnet tool install --global dotnet-ef --version 10.0.10
 
 ENV PATH="$PATH:/root/.dotnet/tools"
 
+RUN dotnet restore src/PulseFlow.Api/PulseFlow.Api.csproj --runtime linux-x64 \
+    && dotnet ef migrations bundle \
+    --project src/PulseFlow.Api/PulseFlow.Api.csproj \
+    --startup-project src/PulseFlow.Api/PulseFlow.Api.csproj \
+    --configuration Release \
+    --runtime linux-x64 \
+    --output /app/migrations/pulseflow-migrations \
+    --force
+
 WORKDIR /src/src/PulseFlow.Api
 
-#final   
 FROM mcr.microsoft.com/dotnet/aspnet:10.0 AS final
 WORKDIR /app
 
 COPY --from=build /app/publish .
+COPY --from=migrations /app/migrations ./migrations
 
 EXPOSE 8080
 

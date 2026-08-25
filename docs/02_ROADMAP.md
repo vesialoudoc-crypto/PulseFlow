@@ -430,11 +430,25 @@ API/consumer coupling are recorded in
 [First Staging Environment Architecture](architecture/staging-environment.md) and
 [ADR 0018](decisions/0018-use-render-for-first-disposable-staging-environment.md).
 
-This is a documentation decision only: Render resources, Terraform/OpenTofu,
-deployment automation, and migration packaging/execution have not been implemented.
-The immediate deployment prerequisite is a mechanism that applies pending EF Core
-migrations exactly once in Render's pre-deploy lifecycle before the new API version
-receives traffic.
+The immutable API image now contains both the normal API runtime and an EF Core
+migration bundle built from the same revision. The normal `dotnet PulseFlow.Api.dll`
+entry point does not run migrations. The future Render pre-deploy command is:
+
+```text
+/app/migrations/pulseflow-migrations --connection "$ConnectionStrings__PulseFlow"
+```
+
+Render will supply `ConnectionStrings__PulseFlow` as a runtime secret. One controlled
+bundle execution precedes rollout; EF Core migration history makes an already-current
+database a successful no-op. This is not a mathematical exactly-once database claim,
+and no API replica participates in migration execution during startup. The image is
+still the sole GHCR artifact: no `pulseflow-migrations` image is published. This
+decision is recorded in
+[ADR 0019](decisions/0019-use-ef-core-migration-bundle-in-api-image.md).
+
+Render resources, Terraform/OpenTofu, deployment automation, and actual staging
+deployment remain unimplemented. The next task is to configure the accepted artifact
+and pre-deploy command in Render infrastructure.
 
 ### Do Not Decide in Advance
 

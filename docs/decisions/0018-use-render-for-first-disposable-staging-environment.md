@@ -71,8 +71,9 @@ The full accepted topology and lifecycle boundaries are documented in
   logical PostgreSQL backup/dump and restore. Redis and RabbitMQ data are operational
   staging state and may be discarded when the entire environment is destroyed.
 - Migrations must execute exactly once before a new API version becomes active.
-  Render pre-deploy is the preferred lifecycle boundary, but the migration
-  artifact/job mechanism remains an immediate implementation decision.
+  Render pre-deploy is the lifecycle boundary. The selected API image contains the
+  EF Core migration bundle invoked by that pre-deploy command; see
+  [ADR 0019](0019-use-ef-core-migration-bundle-in-api-image.md).
 - Increasing API replicas also increases RabbitMQ consumer count under the current
   co-hosted process model; later scaling experiments cannot treat it as isolated API
   scaling.
@@ -83,7 +84,6 @@ The full accepted topology and lifecycle boundaries are documented in
 
 - Terraform/OpenTofu implementation and Render resource deployment.
 - Automatic staging deployment and CI/CD integration.
-- The final migration bundle or dedicated migration image/job.
 - RabbitMQ HA, clustering, backup, prefetch tuning, and consumer changes.
 - `PulseFlow.Worker` extraction and independent API/consumer scaling.
 - AWS service selection, final AWS topology, load testing, and bottleneck
