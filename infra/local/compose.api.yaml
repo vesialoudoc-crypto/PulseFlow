@@ -19,6 +19,7 @@ services:
       RabbitMq__PublisherChannelCount: 4
 
       Ingestion__ChunkCapacity: 100
+      Ingestion__MaxBatchBytes: 10485760
 
       IngestionRateLimit__RequestLimit: 10000000
       IngestionRateLimit__WindowDuration: "00:01:00"

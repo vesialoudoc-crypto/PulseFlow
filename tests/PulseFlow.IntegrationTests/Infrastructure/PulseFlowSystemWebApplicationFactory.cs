@@ -54,6 +54,7 @@ internal sealed class PulseFlowSystemWebApplicationFactory : WebApplicationFacto
                     ["RabbitMq:ConsumerCount"] = _consumerCount.ToString(),
                     ["RabbitMq:PublisherChannelCount"] = "4",
                     ["Ingestion:ChunkCapacity"] = "2",
+                    ["Ingestion:MaxBatchBytes"] = "10485760",
                     ["IngestionRateLimit:RequestLimit"] = "100",
                     ["IngestionRateLimit:WindowDuration"] = TimeSpan.FromMinutes(1).ToString(),
                 }

@@ -101,7 +101,8 @@ Local execution, testing, and deployment must be documented and automated where 
 ## Not Yet Decided
 
 - the final event schema beyond the accepted versioned ingestion envelope;
-- HTTP endpoint paths, response shapes, batch behavior, and batch-size limits;
+- future HTTP endpoint paths, response shapes, and batch behavior beyond the accepted
+  ingestion contract;
 - the exact data model and migration strategy;
 - the boundary between synchronous and asynchronous work;
 - the queue technology and delivery guarantees;

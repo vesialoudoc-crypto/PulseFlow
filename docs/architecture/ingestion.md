@@ -174,10 +174,32 @@ The generation decision is recorded in
 ## HTTP and application composition
 
 The implemented public boundary is `POST /api/events`, exposed by an ASP.NET Core
-controller and restricted to `application/x-ndjson`. The controller copies the
-complete request body as raw bytes and passes those bytes to
-`IIngestionBatchPublisher`; it does not invoke `NdjsonRecordReader`,
+controller and restricted to `application/x-ndjson`. `EventsController` coordinates
+rate limiting, `IIngestionBatchBodyReader`, HTTP results, and
+`IIngestionBatchPublisher`; it does not own buffering, invoke `NdjsonRecordReader`,
 `EventEnvelopeValidator`, `IngestEventsHandler`, or PostgreSQL persistence.
+
+The singleton `PooledIngestionBatchBodyReader` holds only startup-validated immutable
+configuration and the shared `ArrayPool<byte>`, so its per-request state is confined
+to `IngestionBatchBodyReadResult`. The reader owns gradual bounded buffering and
+returns a success result that owns the rented buffer and exposes only its exact
+filled `ReadOnlyMemory<byte>` range. The controller disposes that result only after
+`PublishAsync` completes, including when publishing fails. A too-large result has no
+buffer ownership; read errors and cancellation return the reader's current rented
+buffer before propagating the exception.
+
+`Ingestion:MaxBatchBytes` is a startup-validated positive `long` with a configured
+default of 10 MiB and a 100 MiB hard configuration cap. If `Content-Length` exceeds
+the configured limit, the reader returns a technical too-large result before it reads
+the body or allocates the payload buffer, and the controller maps it to HTTP 413
+Problem Details. It does not trust a lower or absent
+`Content-Length`: it reads at most the configured byte count and one probe byte, then
+returns the same HTTP 413 response without publishing when that probe finds excess
+data. A body exactly at the limit is accepted. The initial pooled capacity is small
+and grows only as bytes arrive; the buffer is returned after `PublishAsync` completes.
+`DisableRequestSizeLimit` on this endpoint leaves the dynamic application limit in
+control rather than Kestrel's lower global default. Request-abort cancellation
+propagates without being remapped to HTTP 413 or HTTP 500.
 
 Application composition calls `builder.Services.AddIngestionMessaging(builder.Configuration)`.
 The extension validates RabbitMQ options and keeps RabbitMQ.Client primitives inside
@@ -208,8 +230,9 @@ choice rather than a final topology or delivery guarantee.
 HTTP `202 Accepted` with no body is returned only after that publisher task completes
 successfully. Consequently, it means RabbitMQ confirmed publication of the raw batch,
 not that any record was parsed, validated, or persisted. Unsupported media types
-return HTTP 415. Publisher and other unhandled failures continue to use the existing
-centralized HTTP 500 Problem Details boundary, with no `202` response.
+return HTTP 415, oversized batches return HTTP 413 Problem Details, and publisher and
+other unhandled failures continue to use the existing centralized HTTP 500 Problem
+Details boundary, with no `202` response.
 
 The implemented dependency graph and lifetimes are:
 
@@ -238,8 +261,8 @@ the parser consumer per RabbitMQ delivery.
 `GlobalExceptionHandler` is registered through ASP.NET Core exception-handler
 middleware with Problem Details. Status-code pages provide Problem Details for
 otherwise body-less error statuses. First-party ASP.NET Core OpenAPI generation
-documents the route, streaming NDJSON request body, and 202, 415, and 500 responses.
-Swagger UI points to the generated document in Development only.
+documents the route, streaming NDJSON request body, and 202, 413, 415, and 500
+responses. Swagger UI points to the generated document in Development only.
 
 ## Test composition
 
@@ -470,7 +493,7 @@ topology, create publisher channels, or subscribe parser workers.
 
 ## Not yet defined
 
-- record, upload, and record-count limits;
+- record, record-count, and RabbitMQ message-size limits;
 - compression;
 - authentication and authorization;
 - automatic dead-letter redrive and a client retry policy beyond preserving `eventId`;

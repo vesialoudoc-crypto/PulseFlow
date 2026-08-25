@@ -155,6 +155,21 @@ variable "ingestion_chunk_capacity" {
   default     = 100
 }
 
+variable "ingestion_max_batch_bytes" {
+  description = "Raw ingestion HTTP request-body limit in bytes. The 10485760 default matches IngestionOptions.DefaultMaxBatchBytes (10 MiB), and the 104857600 cap matches IngestionOptions.MaximumMaxBatchBytes (100 MiB)."
+  type        = number
+  default     = 10485760
+
+  validation {
+    condition = (
+      var.ingestion_max_batch_bytes >= 1
+      && var.ingestion_max_batch_bytes <= 104857600
+      && floor(var.ingestion_max_batch_bytes) == var.ingestion_max_batch_bytes
+    )
+    error_message = "ingestion_max_batch_bytes must be a whole number of bytes from 1 through 104857600 (100 MiB)."
+  }
+}
+
 variable "ingestion_rate_limit_request_limit" {
   description = "Staging global ingestion rate-limit request count per window."
   type        = number

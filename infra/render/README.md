@@ -67,6 +67,12 @@ access. The provider does not provide a clean way to expose only the RabbitMQ
 management UI from a private service while retaining private AMQP. RabbitMQ operator
 UI access is therefore deferred; AMQP `5672` remains private.
 
+`ingestion_max_batch_bytes` is passed to the API as runtime configuration for the raw
+HTTP request-body byte limit. Its default is 10 MiB (`10485760`); Terraform accepts
+whole-byte values from 1 through 100 MiB (`104857600`), matching the application's
+startup-validated range. It is not an NDJSON record-count limit or a RabbitMQ
+message-size limit.
+
 ## Plans and cost boundary
 
 The defaults intentionally select the smallest topology compatible with the accepted

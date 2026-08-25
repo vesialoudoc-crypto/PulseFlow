@@ -20,6 +20,11 @@ public sealed class GlobalExceptionHandler : IExceptionHandler
         CancellationToken cancellationToken
     )
     {
+        if (exception is OperationCanceledException && httpContext.RequestAborted.IsCancellationRequested)
+        {
+            return false;
+        }
+
         _logger.LogError(exception, "Unhandled exception while processing request.");
 
         httpContext.Response.StatusCode = StatusCodes.Status500InternalServerError;

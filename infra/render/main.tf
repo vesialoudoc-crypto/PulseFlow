@@ -108,6 +108,9 @@ resource "render_web_service" "api" {
     Ingestion__ChunkCapacity = {
       value = tostring(var.ingestion_chunk_capacity)
     }
+    Ingestion__MaxBatchBytes = {
+      value = tostring(var.ingestion_max_batch_bytes)
+    }
     IngestionRateLimit__RequestLimit = {
       value = tostring(var.ingestion_rate_limit_request_limit)
     }
