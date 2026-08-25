@@ -283,6 +283,16 @@ local-run instructions require a high enough local rate-limit quota to prevent H
 429 from becoming the limiting factor. Stage 4 remains in progress, and no
 bottleneck conclusion, target, or optimization decision has been made.
 
+The startup-readiness slice is implemented. The process exposes a dependency-free
+`GET /health/live` endpoint and a tagged ASP.NET Core `GET /health/ready` endpoint.
+Readiness requires successful one-time PostgreSQL, RabbitMQ, and Redis initialization,
+completed parser-consumer subscription, and current side-effect-free dependency health
+checks. Runtime dependency failure makes readiness return HTTP 503 without rerunning
+global initialization. The API checks that migrations are current but never executes
+migrations; the Compose migrations service remains responsible for applying them.
+`tests/performance/run.ps1` now waits for readiness rather than using traffic or a
+delay to initialize the ingestion path. See [ADR 0015](decisions/0015-separate-startup-initialization-from-runtime-readiness.md).
+
 ### Do Not Decide in Advance
 
 The exact number of instances and target performance metrics remain undecided. This

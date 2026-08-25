@@ -43,7 +43,8 @@ internal sealed class PulseFlowWebApplicationFactory<TProgram> : WebApplicationF
         string rabbitMqConnectionString,
         string queueName,
         int consumerCount,
-        Action<IServiceCollection>? configureTestServices = null)
+        Action<IServiceCollection>? configureTestServices = null,
+        string? redisConnectionString = null)
         : this(
             connectionString,
             rabbitMqConnectionString,
@@ -51,7 +52,7 @@ internal sealed class PulseFlowWebApplicationFactory<TProgram> : WebApplicationF
             consumerCount,
             useRealRabbitMq: true,
             configureTestServices: configureTestServices,
-            redisConnectionString: null,
+            redisConnectionString: redisConnectionString,
             requestLimit: 100,
             windowDuration: TimeSpan.FromMinutes(1))
     {

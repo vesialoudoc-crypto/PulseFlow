@@ -10,6 +10,7 @@ using PulseFlow.Api.Ingestion.Messaging.RabbitMq;
 using PulseFlow.Api.Ingestion.Ndjson;
 using PulseFlow.Api.Ingestion.Persistence;
 using PulseFlow.Api.Ingestion.Validation;
+using PulseFlow.Api.Startup;
 using RabbitMQ.Client;
 
 namespace PulseFlow.UnitTests.Ingestion.Messaging;
@@ -169,6 +170,29 @@ public sealed class EventParserConsumerTests
     }
 
     [Fact]
+    public async Task EventParserConsumer_StartupInitializationIncomplete_DoesNotCreateConsumerChannelUntilInitializationCompletes()
+    {
+        // Arrange
+        var readinessState = new StartupReadinessState();
+        var store = new RecordingEventChunkStore();
+        var worker = new TestIngestionBatchConsumer();
+        await using var testContext = CreateWorkerTestContext(
+            store,
+            new TestIngestionBatchConsumerFactory(worker),
+            consumerCount: 1,
+            readinessState: readinessState);
+        await testContext.StartAsync();
+
+        // Act
+        var workerStartedBeforeInitializationCompleted = worker.Started.Task.IsCompleted;
+        readinessState.MarkInitializationCompleted();
+        await worker.Started.Task.WaitAsync(TimeSpan.FromSeconds(5));
+
+        // Assert
+        Assert.False(workerStartedBeforeInitializationCompleted);
+    }
+
+    [Fact]
     public async Task RabbitMqIngestionBatchConsumer_CancelFails_StillDisposesChannel()
     {
         // Arrange
@@ -201,9 +225,14 @@ public sealed class EventParserConsumerTests
     private static WorkerTestContext CreateWorkerTestContext(
         RecordingEventChunkStore store,
         IIngestionBatchConsumerFactory consumerFactory,
-        int consumerCount)
+        int consumerCount,
+        StartupReadinessState? readinessState = null)
     {
-        return new WorkerTestContext(CreateServiceProvider(store), consumerFactory, consumerCount);
+        return new WorkerTestContext(
+            CreateServiceProvider(store),
+            consumerFactory,
+            consumerCount,
+            readinessState ?? CreateReadyState());
     }
 
     private static ServiceProvider CreateServiceProvider(RecordingEventChunkStore store)
@@ -244,12 +273,14 @@ public sealed class EventParserConsumerTests
         {
             _serviceProvider = serviceProvider;
             Consumer = consumer;
+            var readinessState = CreateReadyState();
             _eventParserConsumer = new EventParserConsumer(
                 new TestIngestionBatchConsumerFactory(Consumer),
                 _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
                 _serviceProvider.GetRequiredService<NdjsonRecordReader>(),
                 NullLogger<EventParserConsumer>.Instance,
-                consumerCount: 1);
+                consumerCount: 1,
+                readinessState);
         }
 
         public TestIngestionBatchConsumer Consumer { get; }
@@ -331,6 +362,11 @@ public sealed class EventParserConsumerTests
             var cancellationTask = Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
             var completedTask = await Task.WhenAny(_consumptionFailure.Task, cancellationTask);
             await completedTask;
+        }
+
+        public Task WaitUntilStartedAsync(CancellationToken cancellationToken)
+        {
+            return Started.Task.WaitAsync(cancellationToken);
         }
 
         public ValueTask DisposeAsync()
@@ -416,7 +452,8 @@ public sealed class EventParserConsumerTests
         public WorkerTestContext(
             ServiceProvider serviceProvider,
             IIngestionBatchConsumerFactory consumerFactory,
-            int consumerCount)
+            int consumerCount,
+            StartupReadinessState readinessState)
         {
             _serviceProvider = serviceProvider;
             _eventParserConsumer = new EventParserConsumer(
@@ -424,7 +461,8 @@ public sealed class EventParserConsumerTests
                 _serviceProvider.GetRequiredService<IServiceScopeFactory>(),
                 _serviceProvider.GetRequiredService<NdjsonRecordReader>(),
                 NullLogger<EventParserConsumer>.Instance,
-                consumerCount);
+                consumerCount,
+                readinessState);
         }
 
         public Task ExecutionTask => _eventParserConsumer.ExecuteTask
@@ -447,6 +485,13 @@ public sealed class EventParserConsumerTests
             _stoppingSource.Dispose();
             await _serviceProvider.DisposeAsync();
         }
+    }
+
+    private static StartupReadinessState CreateReadyState()
+    {
+        var readinessState = new StartupReadinessState();
+        readinessState.MarkReady();
+        return readinessState;
     }
 
     public class CancelFailingChannel : DispatchProxy

@@ -80,7 +80,6 @@ internal sealed class RabbitMqIngestionBatchPublisher : IIngestionBatchPublisher
 
     public async Task PublishAsync(ReadOnlyMemory<byte> rawBatch, CancellationToken ct)
     {
-        await InitializeAsync(ct);
         var publisherChannels =
             _publisherChannels
             ?? throw new InvalidOperationException("RabbitMQ publisher channel pool is not initialized.");
