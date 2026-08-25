@@ -1,9 +1,7 @@
 name: Publish PulseFlow.Api image
 
 on:
-  push:
-    branches:
-      - develop
+  workflow_dispatch:
 
 permissions:
   contents: read

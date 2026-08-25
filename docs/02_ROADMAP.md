@@ -397,9 +397,11 @@ bottleneck investigation, one justified improvement, and before/after comparison
 
 ### Current implementation
 
-`PulseFlow.Api` is published to GitHub Container Registry after a push to `develop`
-passes the workflow's build, test, formatting, and documentation checks. The image
-name is `ghcr.io/<repository-owner>/pulseflow-api`. Every published image receives an
+`PulseFlow.Api` is published to GitHub Container Registry only when a developer
+manually starts the **Publish PulseFlow.Api image** workflow from GitHub Actions. This
+explicit action represents a staging-image release. The workflow runs its build, test,
+formatting, and documentation checks before publishing. The image name is
+`ghcr.io/<repository-owner>/pulseflow-api`. Every published image receives an
 immutable full-commit-SHA tag, `sha-<40-character-commit-sha>`, which is the
 deployable and auditable tag. The same image also receives the movable `develop` tag
 as a convenience reference; `latest` is not published.
