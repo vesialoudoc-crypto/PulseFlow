@@ -395,6 +395,28 @@ specific AWS service, network topology, or release strategy. Its deployed-enviro
 performance phase preserves the deferred sequence: deployed load measurement,
 bottleneck investigation, one justified improvement, and before/after comparison.
 
+### Current implementation
+
+`PulseFlow.Api` is published to GitHub Container Registry only when a developer
+manually starts the **Publish PulseFlow.Api image** workflow from GitHub Actions. This
+explicit action represents a staging-image release. The workflow runs its build, test,
+formatting, and documentation checks before publishing. The image name is
+`ghcr.io/<repository-owner>/pulseflow-api`. Every published image receives an
+immutable full-commit-SHA tag, `sha-<40-character-commit-sha>`, which is the
+deployable and auditable tag. The same image also receives the movable `develop` tag
+as a convenience reference; `latest` is not published.
+
+Pull a specific immutable image with:
+
+```text
+docker pull ghcr.io/<repository-owner>/pulseflow-api:sha-<40-character-commit-sha>
+```
+
+The image contains only the published API output and receives its connection strings
+and other environment-specific configuration at runtime. It is intended to be reused
+unchanged by local and future staging/cloud deployment environments; no staging or
+cloud infrastructure is defined by this publication step.
+
 ### Do Not Decide in Advance
 
 Specific AWS services, the number of environments, network topology, or release strategy before the stage requirements and costs have been assessed.
