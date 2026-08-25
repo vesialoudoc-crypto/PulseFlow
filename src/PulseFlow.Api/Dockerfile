@@ -5,7 +5,8 @@ COPY src/PulseFlow.Api/PulseFlow.Api.csproj src/PulseFlow.Api/
 RUN dotnet restore src/PulseFlow.Api/PulseFlow.Api.csproj
 
 COPY src/PulseFlow.Api/ src/PulseFlow.Api/
-RUN dotnet publish src/PulseFlow.Api/PulseFlow.Api.csproj -c Release -o /app/publish
+RUN dotnet publish src/PulseFlow.Api/PulseFlow.Api.csproj -c Release -o /app/publish \
+    && rm /app/publish/appsettings.Development.json
 
 
 #migrations
