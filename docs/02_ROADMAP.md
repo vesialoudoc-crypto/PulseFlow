@@ -414,8 +414,9 @@ Pull a specific immutable image with:
 docker pull ghcr.io/<repository-owner>/pulseflow-api:sha-<40-character-commit-sha>
 ```
 
-The image contains only the published API output and receives its connection strings
-and other environment-specific configuration at runtime. It is intended to be reused
+The image contains the published API output plus the framework-dependent migration
+bundle at `/app/migrations/pulseflow-migrations`. It receives connection strings and
+other environment-specific configuration at runtime. It is intended to be reused
 unchanged by local and future staging/cloud deployment environments; no staging or
 cloud infrastructure is defined by this publication step.
 
@@ -430,11 +431,20 @@ API/consumer coupling are recorded in
 [First Staging Environment Architecture](architecture/staging-environment.md) and
 [ADR 0018](decisions/0018-use-render-for-first-disposable-staging-environment.md).
 
-This is a documentation decision only: Render resources, Terraform/OpenTofu,
-deployment automation, and migration packaging/execution have not been implemented.
-The immediate deployment prerequisite is a mechanism that applies pending EF Core
-migrations exactly once in Render's pre-deploy lifecycle before the new API version
-receives traffic.
+The first declarative Render staging definition is in
+[`infra/render/`](../infra/render/). It uses the official Render Terraform provider,
+with normal Terraform/OpenTofu-compatible HCL, and represents the public API,
+managed PostgreSQL, managed Key Value, private RabbitMQ, its persistent disk, runtime
+configuration, `/health/ready`, immutable image selection, and pre-deploy migration
+bundle command. Terraform was selected over a Render Blueprint because later IaC
+work must extend beyond Render into the AWS stage; there is no Blueprint second
+source of truth. The migration bundle lives in the same immutable API image and runs
+once in Render pre-deploy with the runtime PostgreSQL connection string. See
+[ADR 0019](decisions/0019-run-render-migrations-from-an-immutable-api-image.md).
+
+No Render resource, credential, remote state backend, deployment automation, or
+first `plan`/`apply` has been created. The immediate next step is a controlled Render
+account bootstrap and review of the first Terraform plan.
 
 ### Do Not Decide in Advance
 

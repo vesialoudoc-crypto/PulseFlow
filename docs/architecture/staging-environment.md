@@ -176,28 +176,42 @@ new immutable API version selected
         -> new API version becomes active
 ```
 
-Render's pre-deploy lifecycle phase is the preferred boundary for this operation. No
+Render's pre-deploy lifecycle phase is the accepted boundary for this operation. No
 API replica may independently run migrations at startup. The published final runtime
-image does not contain `dotnet-ef`, although the current Dockerfile has a separate
-`migrations` stage. Packaging and executing migrations is the immediate deployment
-implementation decision: an EF Core migration bundle or a dedicated immutable
-migration image/job derived from the same revision are possible approaches. Neither
-approach is selected or implemented here.
+image contains the framework-dependent EF Core migration bundle at
+`/app/migrations/pulseflow-migrations`, alongside the normal
+`dotnet PulseFlow.Api.dll` entry point. Render runs:
+
+```text
+/app/migrations/pulseflow-migrations --connection "$ConnectionStrings__PulseFlow"
+```
+
+in the selected immutable image before starting the API. The PostgreSQL connection
+string is supplied as runtime configuration and is not embedded in the image or
+Terraform source. The runtime image does not contain `dotnet-ef`. This selection is
+recorded in [ADR 0019](../decisions/0019-run-render-migrations-from-an-immutable-api-image.md).
 
 Replacing `sha-old` with `sha-new` must not delete PostgreSQL data, RabbitMQ persistent
 data, or managed Redis merely because the API is redeployed. Destroying the complete
 disposable staging environment may intentionally destroy PostgreSQL, Redis, and
 RabbitMQ state/disk subject to the PostgreSQL backup rule above.
 
-## Deferred implementation work
+## Infrastructure definition and deferred deployment work
 
-The next infrastructure-as-code task must create and configure the Render API
-service, managed PostgreSQL, Key Value storage, RabbitMQ service, and RabbitMQ
-persistent disk. It must also establish private connectivity, public API ingress,
-runtime configuration and secrets, `/health/ready`, immutable GHCR SHA-image
-selection, restricted operator access, and the migration execution mechanism.
+The first reviewable Terraform definition is in
+[`infra/render/`](../../infra/render/). It represents the Render API service, managed
+PostgreSQL, Key Value storage, private RabbitMQ service, RabbitMQ persistent disk,
+private connection values, public API ingress, `/health/ready`, immutable GHCR image
+selection, and the pre-deploy migration command. It does not create resources until
+a later controlled `plan` and `apply`.
 
-This decision does not deploy resources, add Terraform/OpenTofu, configure a Render
-account, implement automatic staging deployment, publish a migration image/bundle,
-extract a worker, change RabbitMQ prefetch or consumer count, run load tests, or
-change the local Compose topology.
+PostgreSQL and Key Value optional operator allow lists are represented as an external
+input. RabbitMQ is deliberately a private service, so AMQP `5672` is not public. The
+selected Render Terraform provider has no clean resource model for exposing only the
+RabbitMQ management UI from that private service. Operator management-UI access is
+therefore deferred rather than weakening the AMQP boundary.
+
+Still deferred: a Render account bootstrap, private-GHCR credential bootstrap,
+automatic deployment/CI-CD integration, first `plan`/`apply`, `PulseFlow.Worker`
+extraction, RabbitMQ prefetch or consumer-count changes, RabbitMQ HA/backup, load
+tests, and final AWS architecture.
