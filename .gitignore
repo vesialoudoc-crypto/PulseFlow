@@ -486,3 +486,10 @@ $RECYCLE.BIN/
 
 # Local performance-test output
 tests/performance/results/
+
+# Terraform/OpenTofu local working data and potentially sensitive state/variables.
+**/.terraform/
+*.tfstate
+*.tfstate.*
+*.tfvars
+!*.tfvars.example

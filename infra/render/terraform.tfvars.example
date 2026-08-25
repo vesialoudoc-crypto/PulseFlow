@@ -1,0 +1,11 @@
+# Copy this file outside the repository or to a non-committed *.tfvars file.
+# Never place real Render, GHCR, database, or RabbitMQ secrets in version control.
+
+pulseflow_image              = "ghcr.io/<repository-owner>/pulseflow-api:sha-<40-lowercase-hex-characters>"
+ghcr_registry_credential_id  = "rgc-<existing-render-ghcr-credential-id>"
+rabbitmq_password            = "<strong-rabbitmq-password>"
+rabbitmq_erlang_cookie       = "<strong-rabbitmq-erlang-cookie>"
+
+# Keep empty for private-only managed datastore access. Add a real trusted CIDR
+# only when temporary external operator access has been intentionally approved.
+trusted_operator_cidrs = []
