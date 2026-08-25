@@ -11,6 +11,21 @@ namespace PulseFlow.UnitTests.Ingestion.Http;
 public sealed class EventsControllerTests
 {
     [Fact]
+    public void EventsController_DisableRequestSizeLimitAttribute_DisablesServerRequestSizeLimit()
+    {
+        // Arrange
+        var controllerType = typeof(EventsController);
+
+        // Act
+        var attribute = controllerType
+            .GetCustomAttributes(typeof(DisableRequestSizeLimitAttribute), inherit: true)
+            .SingleOrDefault();
+
+        // Assert
+        Assert.IsType<DisableRequestSizeLimitAttribute>(attribute);
+    }
+
+    [Fact]
     public async Task IngestAsync_ContentLengthExceedsLimit_DoesNotReadRequestBodyOrPublish()
     {
         // Arrange

@@ -472,10 +472,12 @@ The first public-input hardening slice is implemented. `POST /api/events` bounds
 raw NDJSON request body using startup-validated `Ingestion:MaxBatchBytes`: the default
 is 10 MiB and configuration cannot exceed 100 MiB. A known oversized Content-Length
 is rejected before the body is read; an unknown or chunked body is rejected after at
-most the configured bytes and one probe byte. Both paths return safe HTTP 413 Problem
-Details with a trace ID and do not publish to RabbitMQ. This does not add compression,
-record-count limits, message-size limits, parsing in the HTTP API, or infrastructure
-limits.
+most the configured bytes and one probe byte. The buffer starts small, grows only as
+needed, and is returned to `ArrayPool<byte>` after publishing. The endpoint disables
+Kestrel's request-size limit so this dynamic application limit owns the HTTP 413
+contract. Both rejection paths return safe HTTP 413 Problem Details with a trace ID
+and do not publish to RabbitMQ. This does not add compression, record-count limits,
+message-size limits, parsing in the HTTP API, or infrastructure limits.
 
 ## Deferred Portfolio and Production Coverage
 

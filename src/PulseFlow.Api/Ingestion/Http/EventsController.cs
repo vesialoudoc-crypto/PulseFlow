@@ -1,3 +1,4 @@
+using System.Buffers;
 using Microsoft.AspNetCore.Mvc;
 using Microsoft.Extensions.Options;
 using PulseFlow.Api.Ingestion;
@@ -9,8 +10,10 @@ namespace PulseFlow.Api.Ingestion.Http;
 [ApiController]
 [Route("api/events")]
 [Consumes("application/x-ndjson")]
+[DisableRequestSizeLimit]
 public sealed class EventsController : ControllerBase
 {
+    private const int InitialBatchBufferBytes = 16 * 1024;
     private readonly IIngestionBatchPublisher _publisher;
     private readonly IIngestionRateLimiter _rateLimiter;
     private readonly long _maxBatchBytes;
@@ -53,34 +56,55 @@ public sealed class EventsController : ControllerBase
             return CreatePayloadTooLargeProblem();
         }
 
-        var batch = new byte[checked((int)_maxBatchBytes)];
+        var maximumBatchBytes = checked((int)_maxBatchBytes);
+        var batchCapacity = Math.Min(InitialBatchBufferBytes, maximumBatchBytes);
+        var batch = ArrayPool<byte>.Shared.Rent(batchCapacity);
         var batchLength = 0;
 
-        while (batchLength < batch.Length)
+        try
         {
-            var read = await Request.Body.ReadAsync(batch.AsMemory(batchLength), ct);
-            if (read == 0)
+            while (batchLength < maximumBatchBytes)
             {
-                break;
+                if (batchLength == batchCapacity)
+                {
+                    var expandedBatchCapacity = Math.Min(checked(batchCapacity * 2), maximumBatchBytes);
+                    var expandedBatch = ArrayPool<byte>.Shared.Rent(expandedBatchCapacity);
+
+                    batch.AsSpan(0, batchLength).CopyTo(expandedBatch);
+                    ArrayPool<byte>.Shared.Return(batch);
+                    batch = expandedBatch;
+                    batchCapacity = expandedBatchCapacity;
+                }
+
+                var bytesToRead = Math.Min(batchCapacity - batchLength, maximumBatchBytes - batchLength);
+                var read = await Request.Body.ReadAsync(batch.AsMemory(batchLength, bytesToRead), ct);
+                if (read == 0)
+                {
+                    break;
+                }
+
+                batchLength += read;
             }
 
-            batchLength += read;
-        }
-
-        if (batchLength == batch.Length)
-        {
-            var probe = new byte[1];
-            var read = await Request.Body.ReadAsync(probe, ct);
-
-            if (read != 0)
+            if (batchLength == maximumBatchBytes)
             {
-                return CreatePayloadTooLargeProblem();
+                var probe = new byte[1];
+                var read = await Request.Body.ReadAsync(probe, ct);
+
+                if (read != 0)
+                {
+                    return CreatePayloadTooLargeProblem();
+                }
             }
+
+            await _publisher.PublishAsync(batch.AsMemory(0, batchLength), ct);
+
+            return Accepted();
         }
-
-        await _publisher.PublishAsync(batch.AsMemory(0, batchLength), ct);
-
-        return Accepted();
+        finally
+        {
+            ArrayPool<byte>.Shared.Return(batch);
+        }
     }
 
     private ObjectResult CreatePayloadTooLargeProblem()

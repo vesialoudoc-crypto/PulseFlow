@@ -175,7 +175,8 @@ The generation decision is recorded in
 
 The implemented public boundary is `POST /api/events`, exposed by an ASP.NET Core
 controller and restricted to `application/x-ndjson`. The controller reads the raw
-request body into one bounded buffer and passes its exact filled range to
+request body into a gradually growing bounded buffer rented from `ArrayPool<byte>`
+and passes its exact filled range to
 `IIngestionBatchPublisher`; it does not invoke `NdjsonRecordReader`,
 `EventEnvelopeValidator`, `IngestEventsHandler`, or PostgreSQL persistence.
 
@@ -185,8 +186,11 @@ the configured limit, the controller returns HTTP 413 Problem Details before it 
 the body or allocates the payload buffer. It does not trust a lower or absent
 `Content-Length`: it reads at most the configured byte count and one probe byte, then
 returns the same HTTP 413 response without publishing when that probe finds excess
-data. A body exactly at the limit is accepted. Request-abort cancellation propagates
-without being remapped to HTTP 413 or HTTP 500.
+data. A body exactly at the limit is accepted. The initial pooled capacity is small
+and grows only as bytes arrive; the buffer is returned after `PublishAsync` completes.
+`DisableRequestSizeLimit` on this endpoint leaves the dynamic application limit in
+control rather than Kestrel's lower global default. Request-abort cancellation
+propagates without being remapped to HTTP 413 or HTTP 500.
 
 Application composition calls `builder.Services.AddIngestionMessaging(builder.Configuration)`.
 The extension validates RabbitMQ options and keeps RabbitMQ.Client primitives inside
