@@ -291,6 +291,17 @@ local-run instructions require a high enough local rate-limit quota to prevent H
 429 from becoming the limiting factor. Stage 4 remains in progress, and no
 bottleneck conclusion, target, or optimization decision has been made.
 
+[Ingestion Single vs Multi Comparison 001](performance/ingestion-single-vs-multi-001.md)
+records the completed controlled `10 VU / 10s`, `20 VU / 10s`, and `30 VU / 10s`
+comparison. It found Multi accepted approximately 16-22% more HTTP requests per
+second at 20 and 30 VUs, but no improvement at 10 VUs. Every valid measured run had
+0% HTTP failures and equal accepted HTTP 202 and final persisted-row counts. This is
+not an isolated HTTP/API scaling measurement: Multi changes both the API-process
+count and RabbitMQ-consumer count from one to two. The substantial RabbitMQ backlog
+after each ten-second acceptance burst means HTTP acceptance throughput is not a
+measure of sustainable end-to-end persistence throughput. No linear-scaling,
+production-capacity, or proven-bottleneck conclusion is accepted from this experiment.
+
 The startup-readiness slice is implemented. The process exposes a dependency-free
 `GET /health/live` endpoint and a tagged ASP.NET Core `GET /health/ready` endpoint.
 Readiness requires successful one-time PostgreSQL, RabbitMQ, and Redis initialization,

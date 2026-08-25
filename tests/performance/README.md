@@ -67,6 +67,12 @@ lifecycle is documented in
 
 ## Result artifacts
 
+[Ingestion Single vs Multi Comparison 001](../../docs/performance/ingestion-single-vs-multi-001.md)
+records the completed controlled 10/20/30-VU comparison of the accepted Single and
+Multi topologies. Historical [Baseline 001](../../docs/performance/ingestion-baseline-001.md)
+and [Baseline 002](../../docs/performance/ingestion-baseline-002.md) remain separate
+records.
+
 Each run creates a timestamped directory:
 
 ```text
@@ -121,5 +127,5 @@ API -> Redis rate limiter -> RabbitMQ publisher confirmation -> HTTP 202
 
 PostgreSQL persistence occurs asynchronously after RabbitMQ. The k6 summary and
 RabbitMQ samples do not, by themselves, establish PostgreSQL persistence throughput
-or identify a bottleneck. No official performance baseline, performance target, or
-optimization decision has been made yet.
+or identify a bottleneck. The controlled comparison does not set a performance target
+or an optimization decision.
