@@ -18,7 +18,7 @@ pwsh .\tests\performance\run.ps1 -Topology Multi
 
 `Single` targets one `api` service. `Multi` targets HAProxy and its `api-1` and
 `api-2` backends. This accepted local topology is documented in
-[ADR 0015](../../docs/decisions/0015-use-haproxy-for-local-multi-instance-api-ingress.md).
+[ADR 0016](../../docs/decisions/0016-use-haproxy-for-local-multi-instance-api-ingress.md).
 The runner never guesses a topology. To verify the selected Compose service set
 without requiring or running k6, use:
 
@@ -41,18 +41,16 @@ For every run, the runner:
 1. Removes the prior isolated Compose project for the selected topology and its
    volumes, then creates a fresh `pulseflow-performance-single` or
    `pulseflow-performance-multi` stack.
-2. Uses a topology-specific isolated ingress port (`5255` for Single, `5256` for
-   Multi) and waits until its liveness endpoint returns HTTP 200 before starting the
-   load scenario. It also uses RabbitMQ metrics ports `15693` and `15694`,
-   respectively. This avoids conflicts with the normal local stack's `5254` and
-   `15692` ports.
-3. Sends exactly one valid warm-up event through the selected ingress and waits for
-   that event to reach PostgreSQL and for the RabbitMQ ingestion queue to drain. It
-   then deletes only that event and the Redis key
-   `pulseflow:rate-limit:ingestion:global`, and verifies that PostgreSQL and the queue
-   are empty.
-4. Starts RabbitMQ backlog and container-resource sampling, then runs
+2. Uses topology-specific isolated ingress ports (`5255` for Single, `5256` for
+   Multi) and RabbitMQ metrics ports (`15693` and `15694`), avoiding conflicts with
+   the normal local stack's `5254` and `15692` ports. Single waits for its public
+   `/health/ready` endpoint. Multi probes `/health/ready` on both `api-1` and `api-2`
+   through HAProxy's internal Compose network; one successful request through the
+   load-balanced public ingress is not considered proof that both replicas are ready.
+3. Starts RabbitMQ backlog and container-resource sampling, then runs
    `ingestion-baseline.js` with k6 and saves the k6 summary.
+4. For Multi, records HAProxy log-derived counts proving measured client POST traffic
+   reached both `api-1` and `api-2`; a run fails if either count is zero.
 5. Waits for the RabbitMQ ingestion queue to drain, then reads the final persisted
    row count from PostgreSQL.
 6. Removes the selected isolated performance Compose stack and its volumes when the
@@ -60,10 +58,10 @@ For every run, the runner:
 
 The local Compose configuration keeps the Redis limiter enabled with a local-only
 quota high enough that HTTP 429 is not expected to limit the default scenario.
-The warm-up is outside k6 and finishes before performance sampling starts, so its HTTP
-request, PostgreSQL row, Redis quota use, and RabbitMQ activity are excluded from the
-measured baseline. The measurement-readiness decision is documented in
-[ADR 0016](../../docs/decisions/0016-warm-full-ingestion-path-before-performance-baseline.md).
+The runner does not send a synthetic ingestion warm-up event or delete a warm-up row
+or Redis limiter key. Application-owned readiness is the measurement boundary; its
+lifecycle is documented in
+[ADR 0015](../../docs/decisions/0015-separate-startup-initialization-from-runtime-readiness.md).
 
 ## Result artifacts
 
@@ -82,6 +80,8 @@ It contains:
   which it was captured.
 - `containers.csv` — periodic CPU and memory samples for the local Compose
   containers.
+- `multi-replica-post-traffic.txt` — for Multi only, HAProxy log-derived measured
+  client POST counts for `api-1` and `api-2`.
 
 `rabbitmq.csv` has the following columns:
 

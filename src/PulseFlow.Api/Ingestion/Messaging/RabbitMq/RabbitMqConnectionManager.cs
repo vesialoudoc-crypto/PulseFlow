@@ -17,6 +17,8 @@ internal sealed class RabbitMqConnectionManager : IAsyncDisposable
         _options = options;
     }
 
+    public bool IsConnected => _connection?.IsOpen == true;
+
     public async Task InitializeAsync(CancellationToken ct)
     {
         // Messaging components may start together, but setup must happen once.
@@ -54,9 +56,9 @@ internal sealed class RabbitMqConnectionManager : IAsyncDisposable
 
     public async ValueTask<IChannel> CreateChannelAsync(CreateChannelOptions? options, CancellationToken ct)
     {
-        await InitializeAsync(ct);
+        ThrowIfDisposed();
 
-        if (_connection is null)
+        if (!_isInitialized || _connection is null)
         {
             throw new InvalidOperationException("RabbitMQ connection is not initialized.");
         }

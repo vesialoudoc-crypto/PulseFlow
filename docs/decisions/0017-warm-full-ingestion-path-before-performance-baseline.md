@@ -1,10 +1,10 @@
-# ADR 0016: Warm the full ingestion path before a performance baseline
+# ADR 0017: Warm the full ingestion path before a performance baseline
 
 **Date:** 2026-08-25
 
 ## Status
 
-Accepted
+Superseded by [ADR 0015](0015-separate-startup-initialization-from-runtime-readiness.md)
 
 ## Context
 
@@ -35,7 +35,7 @@ which internal component caused the cold initialization delay.
 
 ## Decision
 
-After liveness succeeds and before performance sampling or k6 starts, prepare the
+Before application-owned startup readiness existed, the runner prepared the
 complete ingestion path with one uniquely identified warm-up event:
 
 ```text
@@ -57,24 +57,20 @@ unacknowledged messages. It then deletes only that warm-up row and only the inge
 limiter key, `pulseflow:rate-limit:ingestion:global`. Before measurement begins, it
 verifies zero PostgreSQL event rows and an empty RabbitMQ main queue.
 
-Liveness means that the process can serve the health endpoint. Liveness alone is not
-sufficient measurement readiness for this ingestion baseline. Baseline measurements
-exclude cold initialization effects unless cold-start performance is explicitly the
-subject being measured. Arbitrary sleeps are not accepted as readiness criteria.
+This was a diagnostic and historical runner mechanism. It is no longer the current
+measurement-readiness mechanism: after integration with application-owned readiness,
+the runner waits for `/health/ready` and does not send, persist, delete, or clean up a
+synthetic ingestion event. Liveness still means only that the process can serve HTTP;
+arbitrary sleeps remain unacceptable readiness criteria.
 
 ## Consequences
 
-- Measurement starts only after an observed traversal of the HTTP, Redis, RabbitMQ,
-  consumer, and PostgreSQL path.
-- The warm-up request runs outside k6 and before performance sampling.
-- Warm-up state cannot contaminate measured HTTP request counts, persisted-row
-  counts, Redis quota, or RabbitMQ backlog; cleanup and zero-state checks are required
-  before the baseline starts.
-- The baseline represents the warmed ingestion path, not cold-start performance.
-- A failure to traverse, drain, clean, or verify the warm-up path prevents the
-  measured baseline from starting.
-- No conclusion is made about which internal component caused the observed cold
-  initialization delay.
+- The historical experiment showed that cold initialization, rather than HTTP handling
+  or Kestrel capacity, explained the observed stall.
+- The current runner does not perform a synthetic-ingestion traversal or cleanup.
+- Application-owned readiness makes required initialization observable at the process
+  boundary without contaminating the measured workload.
+- No conclusion is made about which internal component caused the original cold delay.
 
 ## Validation
 

@@ -108,7 +108,7 @@ passed.
 ## Decisions made
 
 The accepted measurement-readiness rule is recorded in
-[ADR 0016](../decisions/0016-warm-full-ingestion-path-before-performance-baseline.md).
+[ADR 0017](../decisions/0017-warm-full-ingestion-path-before-performance-baseline.md).
 Liveness alone is insufficient for this ingestion baseline: the harness must
 successfully traverse and clean the complete ingestion path, then verify clean
 database and queue state. Arbitrary fixed delays are not accepted as readiness

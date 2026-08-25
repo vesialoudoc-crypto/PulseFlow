@@ -1,4 +1,4 @@
-# ADR 0015: Use HAProxy for local multi-instance API ingress
+# ADR 0016: Use HAProxy for local multi-instance API ingress
 
 **Date:** 2026-08-25
 
@@ -38,7 +38,7 @@ Multi:  client -> HAProxy -> api-1 / api-2
 
 HAProxy is the single public HTTP entry point for Multi. `api-1` and `api-2` are
 internal-only and have no direct host ports. HAProxy routes requests round-robin
-across replicas that pass its active `/health/live` check.
+across replicas that pass its active `/health/ready` check.
 
 Both topologies continue to use the same shared PostgreSQL, RabbitMQ, and Redis
 dependencies. Single is intentionally retained as the reproducible control for
@@ -51,7 +51,7 @@ the future cloud/AWS production ingress.
 
 - Multi has one stable client-facing HTTP endpoint while its API replicas remain
   internal to the local Compose network.
-- HAProxy distributes Multi requests only across replicas that pass `/health/live`.
+- HAProxy distributes Multi requests only across replicas that pass `/health/ready`.
 - Single remains available without HAProxy so it can serve as the control in local
   Single-vs-Multi measurements.
 - PostgreSQL, RabbitMQ, and Redis remain shared rather than being duplicated per API

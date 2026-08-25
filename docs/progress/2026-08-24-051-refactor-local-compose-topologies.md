@@ -19,7 +19,7 @@ measurements and are intentionally unchanged.
   `localhost:5254 -> api`.
 - Preserved the Multi topology as `localhost:5254 -> HAProxy -> api-1 / api-2`.
   The replicas have no direct host ports; HAProxy retains round-robin routing and
-  `/health/live` checks from `haproxy/haproxy.cfg`.
+`/health/live` checks from `haproxy/haproxy.cfg`.
 - Kept PostgreSQL, RabbitMQ, Redis, migrations, and the complete API environment in
   shared configuration. Every API instance has `RabbitMq__ConsumerCount=1`.
 - Made `tests/performance/run.ps1` require `-Topology Single` or `-Topology Multi`.
@@ -69,7 +69,7 @@ Results:
 ## Decisions made
 
 The accepted local topology is recorded in
-[ADR 0015](../decisions/0015-use-haproxy-for-local-multi-instance-api-ingress.md):
+[ADR 0016](../decisions/0016-use-haproxy-for-local-multi-instance-api-ingress.md):
 Single remains the direct reproducible control, while HAProxy is the only public HTTP
 entry point for Multi and distributes requests across the two internal API replicas.
 This does not create a new performance baseline or alter application, Redis limiter,

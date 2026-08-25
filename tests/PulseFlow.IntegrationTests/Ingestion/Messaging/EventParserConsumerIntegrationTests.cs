@@ -10,6 +10,7 @@ using PulseFlow.Api.Ingestion.Persistence;
 using PulseFlow.Api.Ingestion.Validation;
 using PulseFlow.Api.Persistence;
 using PulseFlow.Api.Persistence.Events;
+using PulseFlow.Api.Startup;
 using PulseFlow.IntegrationTests.Infrastructure;
 
 namespace PulseFlow.IntegrationTests.Ingestion.Messaging;
@@ -35,7 +36,8 @@ public sealed class EventParserConsumerIntegrationTests : IClassFixture<PostgreS
             serviceProvider.GetRequiredService<IServiceScopeFactory>(),
             serviceProvider.GetRequiredService<NdjsonRecordReader>(),
             NullLogger<EventParserConsumer>.Instance,
-            consumerCount: 1);
+            consumerCount: 1,
+            CreateReadyState());
         using var stoppingSource = new CancellationTokenSource();
         var rawBatch = string.Join(
             '\n',
@@ -135,6 +137,11 @@ public sealed class EventParserConsumerIntegrationTests : IClassFixture<PostgreS
             await Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
         }
 
+        public Task WaitUntilStartedAsync(CancellationToken cancellationToken)
+        {
+            return Started.Task.WaitAsync(cancellationToken);
+        }
+
         public ValueTask DisposeAsync()
         {
             return ValueTask.CompletedTask;
@@ -152,6 +159,13 @@ public sealed class EventParserConsumerIntegrationTests : IClassFixture<PostgreS
 
             return new ValueTask(handler(delivery, cancellationToken));
         }
+    }
+
+    private static StartupReadinessState CreateReadyState()
+    {
+        var readinessState = new StartupReadinessState();
+        readinessState.MarkReady();
+        return readinessState;
     }
 
     #endregion

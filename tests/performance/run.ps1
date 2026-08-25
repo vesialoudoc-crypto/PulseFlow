@@ -68,7 +68,8 @@ $topologyConfiguration = switch ($Topology) {
 
 $composeProjectName = $topologyConfiguration.ComposeProjectName
 $resourceServices = $topologyConfiguration.ResourceServices
-$livenessUri = "http://localhost:$($topologyConfiguration.IngressPort)/health/live"
+$readinessUri = "http://localhost:$($topologyConfiguration.IngressPort)/health/ready"
+$readinessPollInterval = [TimeSpan]::FromSeconds(2)
 $rabbitMqMetricsUri = "http://localhost:$($topologyConfiguration.RabbitMqMetricsPort)/metrics/detailed?family=queue_coarse_metrics"
 $expectedComposeServices = @($resourceServices + 'migrations' | Sort-Object)
 
@@ -106,11 +107,8 @@ if ($null -eq $k6Command) {
 New-Item -ItemType Directory -Path $resultDirectory -ErrorAction Stop | Out-Null
 Write-Output $resultDirectory
 
-$livenessPollInterval = [TimeSpan]::FromSeconds(2)
 $rabbitMqMetricsPollIntervalSeconds = 2
 $downstreamCompletionTimeout = [TimeSpan]::FromMinutes(5)
-$warmUpSource = 'performance-runner-warm-up'
-$redisLimiterKey = 'pulseflow:rate-limit:ingestion:global'
 
 function Get-AcceptedRequestCountFromK6Summary {
     param([string]$SummaryPath)
@@ -425,154 +423,63 @@ try {
         throw "Failed to build and start the '$composeProjectName' Compose stack."
     }
 
-    # Wait for a serving API so later performance steps do not measure startup time or transient connection failures.
-    Write-Host 'Waiting for the API liveness endpoint...'
-    $apiIsLive = $false
+    # Readiness is application-owned. It completes only after mandatory startup work
+    # and parser-consumer registration, so k6 never performs first-request initialization.
+    if ($Topology -eq 'Single') {
+        Write-Host "Waiting for Single API readiness at '$readinessUri'..."
+        while ($true) {
+            try {
+                $response = Invoke-WebRequest -Uri $readinessUri -Method Get -SkipHttpErrorCheck
+                if ($response.StatusCode -eq 200) {
+                    Write-Host 'Single API is ready.'
+                    break
+                }
 
-    while (-not $apiIsLive) {
-        try {
-            $response = Invoke-WebRequest -Uri $livenessUri -Method Get
-            if ($response.StatusCode -ne 200) {
-                throw "The API liveness endpoint returned HTTP $($response.StatusCode)."
+                if ($response.StatusCode -ne 503) {
+                    throw "The Single API readiness endpoint returned HTTP $($response.StatusCode)."
+                }
+            }
+            catch {
+                $isConnectionError = $_.CategoryInfo.Category -eq 'ConnectionError'
+                $isResponseEnded =
+                    $_.FullyQualifiedErrorId -like '*ResponseEnded*' -or
+                    $_.ErrorDetails.Message -like '*ResponseEnded*'
+
+                if (-not ($isConnectionError -or $isResponseEnded)) {
+                    throw
+                }
             }
 
-            Write-Host 'API is live.'
-            $apiIsLive = $true
-            break
+            Start-Sleep -Seconds $readinessPollInterval.TotalSeconds
         }
-        catch {
-            $isConnectionError = $_.CategoryInfo.Category -eq 'ConnectionError'
-            $isResponseEnded =
-                $_.FullyQualifiedErrorId -like '*ResponseEnded*' -or
-                $_.ErrorDetails.Message -like '*ResponseEnded*'
+    }
+    else {
+        # api-1 and api-2 deliberately have no host ports. Probe each replica from
+        # HAProxy over the internal Compose network rather than inferring readiness
+        # from one load-balanced response at the public ingress.
+        $multiReplicaServices = @('api-1', 'api-2')
+        $readyReplicaServices = [System.Collections.Generic.HashSet[string]]::new()
+        Write-Host 'Waiting for Multi API replica readiness through the internal Compose network...'
 
-            if (-not ($isConnectionError -or $isResponseEnded)) {
-                throw
+        while ($readyReplicaServices.Count -lt $multiReplicaServices.Count) {
+            foreach ($service in $multiReplicaServices) {
+                if ($readyReplicaServices.Contains($service)) {
+                    continue
+                }
+
+                & $dockerCommand.Source compose @composeFileArguments --project-name $composeProjectName exec -T haproxy `
+                    wget -q -O /dev/null "http://${service}:8080/health/ready" 2>$null
+                if ($LASTEXITCODE -eq 0) {
+                    [void]$readyReplicaServices.Add($service)
+                    Write-Host "Multi API replica '$service' is ready."
+                }
             }
 
-            # The API may not have bound its port yet or may have closed a request while starting.
-        }
-
-        Start-Sleep -Seconds $livenessPollInterval.TotalSeconds
-    }
-
-    # Exercise every ingestion dependency once before measurement. The request is sent
-    # only once; readiness is established by polling its downstream effects.
-    $warmUpEventId = [Guid]::NewGuid().ToString('D')
-    $warmUpEvent = [ordered]@{
-        eventId = $warmUpEventId
-        type = 'ingestion.performance-warm-up'
-        source = $warmUpSource
-        occurredAt = [DateTime]::UtcNow.ToString('O')
-        payload = [ordered]@{
-            scenario = 'performance-runner-warm-up'
+            if ($readyReplicaServices.Count -lt $multiReplicaServices.Count) {
+                Start-Sleep -Seconds $readinessPollInterval.TotalSeconds
+            }
         }
     }
-    $warmUpBody = ($warmUpEvent | ConvertTo-Json -Compress -Depth 3) + "`n"
-    $warmUpUri = "$($env:BASE_URL)/api/events"
-
-    Write-Host "Sending one ingestion warm-up event '$warmUpEventId' through topology '$Topology'..."
-    $warmUpResponse = Invoke-WebRequest `
-        -Uri $warmUpUri `
-        -Method Post `
-        -ContentType 'application/x-ndjson' `
-        -Body $warmUpBody `
-        -SkipHttpErrorCheck
-    if ($warmUpResponse.StatusCode -ne 202) {
-        throw "The ingestion warm-up returned HTTP $($warmUpResponse.StatusCode); expected HTTP 202."
-    }
-
-    Write-Host 'Warm-up ingestion returned HTTP 202.'
-
-    $warmUpPredicate = "source = '$warmUpSource' AND event_id = '$warmUpEventId'::uuid"
-    $warmUpDeadline = [DateTime]::UtcNow.Add($downstreamCompletionTimeout)
-    while ($true) {
-        $warmUpRowCount = [long](Invoke-PostgresScalar `
-                -Query "SELECT COUNT(*) FROM events WHERE $warmUpPredicate;" `
-                -FailureMessage 'Failed to query the warm-up event in PostgreSQL.')
-
-        if ($warmUpRowCount -eq 1) {
-            Write-Host "Warm-up event '$warmUpEventId' reached PostgreSQL."
-            break
-        }
-
-        if ($warmUpRowCount -gt 1) {
-            throw "PostgreSQL contains $warmUpRowCount rows for warm-up event '$warmUpEventId'; expected exactly one."
-        }
-
-        if ([DateTime]::UtcNow -ge $warmUpDeadline) {
-            throw "Warm-up event '$warmUpEventId' did not reach PostgreSQL within $($downstreamCompletionTimeout.TotalMinutes) minutes."
-        }
-
-        Start-Sleep -Seconds $rabbitMqMetricsPollIntervalSeconds
-    }
-
-    while ($true) {
-        $warmUpQueueStatus = Get-RabbitMqQueueStatus
-        if ($warmUpQueueStatus.MessagesReady -eq 0 -and $warmUpQueueStatus.MessagesUnacknowledged -eq 0) {
-            Write-Host 'RabbitMQ warm-up queue drained: ready=0, unacknowledged=0.'
-            break
-        }
-
-        Write-Host "Waiting for warm-up queue drain: ready=$($warmUpQueueStatus.MessagesReady), unacknowledged=$($warmUpQueueStatus.MessagesUnacknowledged)."
-        if ([DateTime]::UtcNow -ge $warmUpDeadline) {
-            throw "RabbitMQ warm-up queue did not drain within $($downstreamCompletionTimeout.TotalMinutes) minutes."
-        }
-
-        Start-Sleep -Seconds $rabbitMqMetricsPollIntervalSeconds
-    }
-
-    $deletedWarmUpRowCount = [long](Invoke-PostgresScalar `
-            -Query "WITH deleted AS (DELETE FROM events WHERE $warmUpPredicate RETURNING 1) SELECT COUNT(*) FROM deleted;" `
-            -FailureMessage 'Failed to delete the warm-up event from PostgreSQL.')
-    if ($deletedWarmUpRowCount -ne 1) {
-        throw "Deleted $deletedWarmUpRowCount PostgreSQL rows for warm-up event '$warmUpEventId'; expected exactly one."
-    }
-
-    Write-Host "Deleted only warm-up event '$warmUpEventId' from PostgreSQL."
-
-    $redisDeleteOutput = & $dockerCommand.Source compose @composeFileArguments --project-name $composeProjectName exec -T redis `
-        redis-cli --raw DEL $redisLimiterKey
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to delete Redis limiter key '$redisLimiterKey'."
-    }
-
-    $redisDeletedKeyCount = [long](($redisDeleteOutput | Out-String).Trim())
-    if ($redisDeletedKeyCount -ne 1) {
-        throw "Redis deleted $redisDeletedKeyCount keys for '$redisLimiterKey'; expected exactly one."
-    }
-
-    $redisExistsOutput = & $dockerCommand.Source compose @composeFileArguments --project-name $composeProjectName exec -T redis `
-        redis-cli --raw EXISTS $redisLimiterKey
-    if ($LASTEXITCODE -ne 0) {
-        throw "Failed to verify Redis limiter key '$redisLimiterKey'."
-    }
-
-    $redisKeyExists = [long](($redisExistsOutput | Out-String).Trim())
-    if ($redisKeyExists -ne 0) {
-        throw "Redis limiter key '$redisLimiterKey' still exists after deletion."
-    }
-
-    Write-Host "Deleted Redis limiter key '$redisLimiterKey' and verified it is absent."
-
-    $preMeasurementRowCount = [long](Invoke-PostgresScalar `
-            -Query 'SELECT COUNT(*) FROM events;' `
-            -FailureMessage 'Failed to verify the pre-measurement PostgreSQL event count.')
-    if ($preMeasurementRowCount -ne 0) {
-        throw "PostgreSQL contains $preMeasurementRowCount events immediately before measurement; expected zero."
-    }
-
-    Write-Host 'Pre-k6 PostgreSQL events count: 0.'
-
-    $preMeasurementQueueStatus = Get-RabbitMqQueueStatus
-    if (
-        $preMeasurementQueueStatus.MessagesReady -ne 0 -or
-        $preMeasurementQueueStatus.MessagesUnacknowledged -ne 0
-    ) {
-        throw "RabbitMQ queue is not empty immediately before measurement: ready=$($preMeasurementQueueStatus.MessagesReady), unacknowledged=$($preMeasurementQueueStatus.MessagesUnacknowledged)."
-    }
-
-    Write-Host 'Pre-k6 RabbitMQ queue: ready=0, unacknowledged=0.'
 
     # Run the fixed baseline scenario and preserve its summary so the observed result can be reviewed later.
     $scenarioPath = Join-Path $PSScriptRoot 'ingestion-baseline.js'
@@ -580,6 +487,7 @@ try {
     $rabbitMqCsvPath = Join-Path $resultDirectory 'rabbitmq.csv'
     $containerCsvPath = Join-Path $resultDirectory 'containers.csv'
     $databasePath = Join-Path $resultDirectory 'database.txt'
+    $multiReplicaTrafficPath = Join-Path $resultDirectory 'multi-replica-post-traffic.txt'
 
     'timestamp_utc,messages_ready,messages_unacknowledged,messages_total' |
         Set-Content -LiteralPath $rabbitMqCsvPath -Encoding utf8 -ErrorAction Stop
@@ -729,6 +637,36 @@ try {
 
         $acceptedRequestCount = Get-AcceptedRequestCountFromK6Summary $summaryPath
         Write-Host "Accepted HTTP 202 count from k6 summary: $acceptedRequestCount."
+
+        if ($Topology -eq 'Multi') {
+            # HAProxy's HTTP logs name the selected backend server. Since the runner no
+            # longer sends an ingestion warm-up request, these POST entries are measured
+            # client traffic from k6 rather than setup traffic.
+            $haproxyLogLines = @(
+                & $dockerCommand.Source compose @composeFileArguments --project-name $composeProjectName logs `
+                    --no-color --no-log-prefix haproxy
+            )
+            if ($LASTEXITCODE -ne 0) {
+                throw 'Failed to read HAProxy logs for Multi replica traffic verification.'
+            }
+
+            $apiOnePostCount = @(
+                $haproxyLogLines | Where-Object { $_ -match 'api_backends/api-1.*"POST /api/events(?:\?| )' }
+            ).Count
+            $apiTwoPostCount = @(
+                $haproxyLogLines | Where-Object { $_ -match 'api_backends/api-2.*"POST /api/events(?:\?| )' }
+            ).Count
+            @(
+                "api-1 measured client POST count: $apiOnePostCount"
+                "api-2 measured client POST count: $apiTwoPostCount"
+            ) | Set-Content -LiteralPath $multiReplicaTrafficPath -Encoding utf8 -ErrorAction Stop
+
+            if ($apiOnePostCount -eq 0 -or $apiTwoPostCount -eq 0) {
+                throw "Measured client POST traffic was not observed on both Multi API replicas. See '$multiReplicaTrafficPath'."
+            }
+
+            Write-Host "Measured client POST traffic: api-1=$apiOnePostCount, api-2=$apiTwoPostCount."
+        }
 
         # An empty queue sample alone is not proof of completion: RabbitMQ metrics can briefly
         # report 0/0 immediately after k6 exits. Confirm completion only when PostgreSQL reaches

@@ -269,7 +269,7 @@ routes round-robin across healthy internal `api-1` and `api-2` replicas; both AP
 processes also host one RabbitMQ consumer when `RabbitMq:ConsumerCount = 1`. Both
 topologies share PostgreSQL, RabbitMQ, and Redis. This local choice does not select
 the future cloud/AWS ingress. See
-[ADR 0015](decisions/0015-use-haproxy-for-local-multi-instance-api-ingress.md).
+[ADR 0016](decisions/0016-use-haproxy-for-local-multi-instance-api-ingress.md).
 
 The reproducible load-test harness is available at
 [`tests/performance/ingestion-baseline.js`](../tests/performance/ingestion-baseline.js). It uses a closed model
@@ -291,15 +291,26 @@ local-run instructions require a high enough local rate-limit quota to prevent H
 429 from becoming the limiting factor. Stage 4 remains in progress, and no
 bottleneck conclusion, target, or optimization decision has been made.
 
-Before starting performance samplers or k6, the runner prepares the complete
-ingestion path with exactly one uniquely identified event through the selected
-topology ingress. It requires HTTP 202, observes that event in PostgreSQL, waits for
-the RabbitMQ main queue to drain, then deletes only the warm-up row and the global
-Redis limiter key. A final zero-row PostgreSQL check and zero-ready/zero-unacknowledged
-RabbitMQ check keep all warm-up work outside the fixed 10-second baseline. Liveness
-alone is not measurement readiness for this baseline, and arbitrary fixed sleeps are
-not accepted as readiness criteria. See
-[ADR 0016](decisions/0016-warm-full-ingestion-path-before-performance-baseline.md).
+The startup-readiness slice is implemented. The process exposes a dependency-free
+`GET /health/live` endpoint and a tagged ASP.NET Core `GET /health/ready` endpoint.
+Readiness requires successful one-time PostgreSQL, RabbitMQ, and Redis initialization,
+completed parser-consumer subscription, and current side-effect-free dependency health
+checks. Runtime dependency failure makes readiness return HTTP 503 without rerunning
+global initialization. The API checks that migrations are current but never executes
+migrations; the Compose migrations service remains responsible for applying them.
+
+HAProxy active health checks use `/health/ready`, so its Multi ingress sends client
+traffic only to replicas that have completed mandatory initialization and whose
+runtime dependencies are healthy. Before it starts samplers or fixed 10-second k6,
+`tests/performance/run.ps1` waits for `Single`'s API readiness endpoint or directly
+probes both `Multi` replicas' readiness endpoints through the internal Compose network.
+It does not use a synthetic ingestion POST, row deletion, Redis-key deletion, or an
+arbitrary sleep as its readiness mechanism. Multi also preserves HAProxy-log evidence
+that both replicas received measured client POST traffic. See
+[ADR 0015](decisions/0015-separate-startup-initialization-from-runtime-readiness.md),
+[ADR 0016](decisions/0016-use-haproxy-for-local-multi-instance-api-ingress.md), and
+[ADR 0017](decisions/0017-warm-full-ingestion-path-before-performance-baseline.md)
+for the superseded diagnostic warm-up history.
 
 ### Do Not Decide in Advance
 

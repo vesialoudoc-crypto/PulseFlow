@@ -1,6 +1,6 @@
 # Ingestion Architecture
 
-**Status:** Stage 3 terminal rejection and event-level idempotency slices implemented
+**Status:** Stage 4 Redis rate limiting and startup-readiness slices implemented
 
 ## Event record
 
@@ -374,6 +374,66 @@ limit of four requests in one minute, alternating four accepted requests between
 hosts makes a fifth request through the first host return HTTP 429 with `Retry-After`.
 The shared recording publisher observes exactly four calls. This verifies shared quota
 state across the two DI containers; it is not a load or performance measurement.
+
+## Startup initialization, liveness, and readiness
+
+The process distinguishes one-time startup initialization from repeatable runtime
+health checks. This is an accepted operational boundary recorded in
+[ADR 0015](../decisions/0015-separate-startup-initialization-from-runtime-readiness.md).
+
+At process start, `StartupInitializationService` runs registered
+`IStartupInitializer` implementations sequentially. Its singleton
+`StartupReadinessState` starts as `Starting`, records a diagnostic exception on
+`Failed`, and exposes awaitable completion using `TaskCompletionSource` with
+asynchronous continuations. It becomes `Ready` only after the initializers and parser
+consumer readiness participants have completed. There is no polling or fixed delay.
+Waiting components remain blocked when initialization fails and exit through normal
+host-stop cancellation.
+
+The one-time startup operations are:
+
+- PostgreSQL: create a DI scope, verify connectivity, and fail when EF Core reports
+  pending migrations. The API never calls `Database.Migrate`; Compose's `migrations`
+  service executes `dotnet ef database update` before the API starts.
+- RabbitMQ: create the shared connection, declare the existing application-owned
+  topology, and create the bounded publisher-confirmation channel pool.
+- Redis: create the shared `IConnectionMultiplexer`, resolve the rate limiter so its
+  embedded Lua script loads, and execute `PING`.
+- Parser consumers: after the infrastructure phase, create one consumer channel and
+  `BasicConsume` subscription per configured worker. Their completed subscriptions are
+  an explicit readiness participant, so performance traffic does not race registration.
+
+The endpoints have deliberately different meanings:
+
+```text
+GET /health/live
+    ASP.NET Core process is serving HTTP. No dependency or initialization check runs.
+
+GET /health/ready
+    mandatory startup initialization completed successfully, and PostgreSQL,
+    Redis, and the existing RabbitMQ connection are currently healthy.
+```
+
+`/health/ready` uses standard ASP.NET Core health checks tagged `ready`. Every probe
+checks startup state, opens a cheap PostgreSQL connectivity check, sends Redis `PING`,
+and reads the existing RabbitMQ connection's open state. It does not create RabbitMQ
+connections or channels, declare topology, publish, run migrations, load the rate-limit
+Lua resource, or rerun any startup initializer. A post-start dependency failure returns
+HTTP 503 from readiness while the startup state remains `Ready`.
+
+The performance runner uses readiness as the pre-measurement boundary before it starts
+samplers or k6. In Single, it polls the API's public `/health/ready` endpoint. In
+Multi, it uses HAProxy's internal Compose network to poll `/health/ready` on both
+`api-1` and `api-2`; it does not infer two-replica readiness from one success through
+the load-balanced public ingress. HAProxy itself actively health-checks
+`/health/ready`, retaining round-robin routing while excluding an alive but unready
+replica from client traffic. The runner records HAProxy log-derived measured POST
+counts for both replicas and fails a Multi run unless both received traffic.
+
+No synthetic ingestion warm-up POST, PostgreSQL-row deletion, or Redis-key deletion
+precedes the fixed 10-second workload. Therefore, the first k6 ingestion request does
+not create the Redis multiplexer, load the limiter Lua script, establish RabbitMQ
+topology, create publisher channels, or subscribe parser workers.
 
 ## Not yet defined
 

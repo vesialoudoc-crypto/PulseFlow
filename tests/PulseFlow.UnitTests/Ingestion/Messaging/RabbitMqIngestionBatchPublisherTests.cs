@@ -19,6 +19,7 @@ public sealed class RabbitMqIngestionBatchPublisherTests
                 QueueName = "test-queue",
                 PublisherChannelCount = 4,
             });
+        await publisher.InitializeAsync(CancellationToken.None);
         var firstFourPublishes = Enumerable.Range(0, 4)
             .Select(_ => publisher.PublishAsync(ReadOnlyMemory<byte>.Empty, CancellationToken.None))
             .ToArray();
