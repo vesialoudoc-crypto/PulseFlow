@@ -8,6 +8,7 @@ internal sealed class RabbitMqIngestionBatchConsumer : IIngestionBatchConsumer
     private readonly IChannel _channel;
     private readonly string _queueName;
     private readonly TaskCompletionSource _callbackFailure = new(TaskCreationOptions.RunContinuationsAsynchronously);
+    private readonly TaskCompletionSource _started = new(TaskCreationOptions.RunContinuationsAsynchronously);
     private string? _consumerTag;
     private bool _isDisposed;
 
@@ -21,8 +22,21 @@ internal sealed class RabbitMqIngestionBatchConsumer : IIngestionBatchConsumer
     {
         ArgumentNullException.ThrowIfNull(handler);
 
-        await StartAsync(handler, ct);
-        await _callbackFailure.Task.WaitAsync(ct);
+        try
+        {
+            await StartAsync(handler, ct);
+            await _callbackFailure.Task.WaitAsync(ct);
+        }
+        catch (Exception exception)
+        {
+            _started.TrySetException(exception);
+            throw;
+        }
+    }
+
+    public Task WaitUntilStartedAsync(CancellationToken cancellationToken)
+    {
+        return _started.Task.WaitAsync(cancellationToken);
     }
 
     public async ValueTask DisposeAsync()
@@ -48,7 +62,7 @@ internal sealed class RabbitMqIngestionBatchConsumer : IIngestionBatchConsumer
         }
     }
 
-    private async Task StartAsync(IngestionBatchHandler handler, CancellationToken cancellationToken)
+    private async Task StartAsync(IngestionBatchHandler handler, CancellationToken ct)
     {
         if (_consumerTag is not null)
         {
@@ -64,8 +78,9 @@ internal sealed class RabbitMqIngestionBatchConsumer : IIngestionBatchConsumer
             queue: _queueName,
             autoAck: false,
             consumer: consumer,
-            cancellationToken: cancellationToken
+            cancellationToken: ct
         );
+        _started.TrySetResult();
 
         async Task OnReceivedAsync(object _, BasicDeliverEventArgs eventArgs)
         {
@@ -75,9 +90,9 @@ internal sealed class RabbitMqIngestionBatchConsumer : IIngestionBatchConsumer
             try
             {
                 // The application owns processing and settlement, not RabbitMQ primitives.
-                await handler(delivery, cancellationToken);
+                await handler(delivery, ct);
             }
-            catch (OperationCanceledException) when (cancellationToken.IsCancellationRequested) { }
+            catch (OperationCanceledException) when (ct.IsCancellationRequested) { }
             catch (Exception exception)
             {
                 _callbackFailure.TrySetException(exception);
@@ -88,14 +103,14 @@ internal sealed class RabbitMqIngestionBatchConsumer : IIngestionBatchConsumer
 
     private IngestionBatchDelivery CreateDelivery(BasicDeliverEventArgs eventArgs)
     {
-        Task AcknowledgeAsync(CancellationToken cancellationToken)
+        Task AcknowledgeAsync(CancellationToken ct)
         {
-            return _channel.BasicAckAsync(eventArgs.DeliveryTag, multiple: false, cancellationToken).AsTask();
+            return _channel.BasicAckAsync(eventArgs.DeliveryTag, multiple: false, ct).AsTask();
         }
 
-        Task RejectAsync(CancellationToken cancellationToken)
+        Task RejectAsync(CancellationToken ct)
         {
-            return _channel.BasicRejectAsync(eventArgs.DeliveryTag, requeue: false, cancellationToken).AsTask();
+            return _channel.BasicRejectAsync(eventArgs.DeliveryTag, requeue: false, ct).AsTask();
         }
 
         return new IngestionBatchDelivery(eventArgs.Body.ToArray(), AcknowledgeAsync, RejectAsync);

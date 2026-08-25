@@ -10,6 +10,7 @@ using PulseFlow.Api.Ingestion.Persistence;
 using PulseFlow.Api.Ingestion.RateLimiting;
 using PulseFlow.Api.Persistence;
 using PulseFlow.Api.Persistence.Events;
+using PulseFlow.Api.Startup;
 using PulseFlow.IntegrationTests.Infrastructure;
 using RabbitMQ.Client;
 
@@ -17,17 +18,21 @@ namespace PulseFlow.IntegrationTests.Ingestion.Messaging;
 
 public sealed class RabbitMqAsynchronousIngestionTests :
     IClassFixture<PostgreSqlFixture>,
-    IClassFixture<RabbitMqFixture>
+    IClassFixture<RabbitMqFixture>,
+    IClassFixture<RedisFixture>
 {
     private readonly PostgreSqlFixture _postgreSqlFixture;
     private readonly RabbitMqFixture _rabbitMqFixture;
+    private readonly RedisFixture _redisFixture;
 
     public RabbitMqAsynchronousIngestionTests(
         PostgreSqlFixture postgreSqlFixture,
-        RabbitMqFixture rabbitMqFixture)
+        RabbitMqFixture rabbitMqFixture,
+        RedisFixture redisFixture)
     {
         _postgreSqlFixture = postgreSqlFixture;
         _rabbitMqFixture = rabbitMqFixture;
+        _redisFixture = redisFixture;
     }
 
     [Fact]
@@ -40,9 +45,10 @@ public sealed class RabbitMqAsynchronousIngestionTests :
             "real-broker.integration.second"
         };
         // A unique queue keeps another test run from taking this batch.
+        await EnsureDatabaseMigratedAsync();
         using var factory = CreateFactory(consumerCount: 1, CreateQueueName());
-        await EnsureDatabaseMigratedAsync(factory.Services);
         using var client = factory.CreateClient();
+        await WaitUntilReadyAsync(factory);
         using var content = CreateNdjsonContent(expectedTypes);
 
         // Act
@@ -60,8 +66,10 @@ public sealed class RabbitMqAsynchronousIngestionTests :
     {
         // Arrange
         var queueName = CreateQueueName();
+        await EnsureDatabaseMigratedAsync();
         using var factory = CreateFactory(consumerCount: 2, queueName);
         using var client = factory.CreateClient();
+        await WaitUntilReadyAsync(factory);
 
         // Act
         var queueInfo = await WaitForConsumerCountAsync(queueName, expectedCount: 2);
@@ -77,6 +85,7 @@ public sealed class RabbitMqAsynchronousIngestionTests :
         const string failedType = "real-broker.integration.failed";
         var healthyType = "real-broker.integration.healthy";
         var queueName = CreateQueueName();
+        await EnsureDatabaseMigratedAsync();
         using var factory = CreateFactory(
             consumerCount: 1,
             queueName,
@@ -84,9 +93,9 @@ public sealed class RabbitMqAsynchronousIngestionTests :
                 new FailingEventChunkStore(
                     serviceProvider.GetRequiredService<PulseFlowDbContext>(),
                     failedType)));
-        await EnsureDatabaseMigratedAsync(factory.Services);
         var options = factory.Services.GetRequiredService<IOptions<RabbitMqOptions>>().Value;
         using var client = factory.CreateClient();
+        await WaitUntilReadyAsync(factory);
         var failedBatch = CreateRecordJson(failedType) + "\n";
         using var failedContent = CreateNdjsonContent(failedBatch);
 
@@ -125,7 +134,8 @@ public sealed class RabbitMqAsynchronousIngestionTests :
             _rabbitMqFixture.ConnectionString,
             queueName,
             consumerCount,
-            ConfigureServices);
+            ConfigureServices,
+            _redisFixture.ConnectionString);
     }
 
     private static ByteArrayContent CreateNdjsonContent(IEnumerable<string> types)
@@ -149,11 +159,17 @@ public sealed class RabbitMqAsynchronousIngestionTests :
         return content;
     }
 
-    private async Task EnsureDatabaseMigratedAsync(IServiceProvider services)
+    private async Task EnsureDatabaseMigratedAsync()
     {
-        await using var scope = services.CreateAsyncScope();
-        var dbContext = scope.ServiceProvider.GetRequiredService<PulseFlowDbContext>();
+        await using var dbContext = CreateDbContext();
         await dbContext.Database.MigrateAsync();
+    }
+
+    private static async Task WaitUntilReadyAsync(PulseFlowWebApplicationFactory<Program> factory)
+    {
+        using var cancellationSource = new CancellationTokenSource(TimeSpan.FromSeconds(15));
+        var readinessState = factory.Services.GetRequiredService<StartupReadinessState>();
+        await readinessState.WaitUntilReadyAsync(cancellationSource.Token);
     }
 
     private async Task<string[]> WaitForPersistedTypesAsync(IReadOnlyCollection<string> expectedTypes)

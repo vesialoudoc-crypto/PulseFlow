@@ -1,7 +1,9 @@
 using Microsoft.Extensions.Configuration;
+using Microsoft.Extensions.Diagnostics.HealthChecks;
 using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using PulseFlow.Api.Ingestion.Messaging.RabbitMq;
+using PulseFlow.Api.Startup;
 
 namespace PulseFlow.Api.Ingestion.Messaging;
 
@@ -9,7 +11,8 @@ public static class IngestionMessagingServiceCollectionExtensions
 {
     public static IServiceCollection AddIngestionMessaging(
         this IServiceCollection services,
-        IConfiguration configuration
+        IConfiguration configuration,
+        IHostEnvironment environment
     )
     {
         // Keep RabbitMQ configuration inside messaging setup, not in application code.
@@ -49,7 +52,7 @@ public static class IngestionMessagingServiceCollectionExtensions
             )
         );
 
-        // Queue setup must finish before parser workers begin reading deliveries.
+        // Queue setup participates in the process-wide startup initialization sequence.
         services.AddSingleton<RabbitMqMessagingInitializer>();
         services.AddSingleton<EventParserConsumer>(serviceProvider =>
         {
@@ -60,29 +63,29 @@ public static class IngestionMessagingServiceCollectionExtensions
                 serviceProvider.GetRequiredService<IServiceScopeFactory>(),
                 serviceProvider.GetRequiredService<Ndjson.NdjsonRecordReader>(),
                 serviceProvider.GetRequiredService<ILogger<EventParserConsumer>>(),
-                options.ConsumerCount
+                options.ConsumerCount,
+                serviceProvider.GetRequiredService<StartupReadinessState>()
             );
         });
 
+        if (!environment.IsEnvironment("Testing"))
+        {
+            services.AddSingleton<IStartupInitializer>(serviceProvider =>
+                serviceProvider.GetRequiredService<RabbitMqMessagingInitializer>()
+            );
+            services.AddSingleton<IStartupReadinessParticipant>(serviceProvider =>
+                serviceProvider.GetRequiredService<EventParserConsumer>()
+            );
+            services.AddHealthChecks().AddCheck<RabbitMqHealthCheck>("rabbitmq", tags: ["ready"]);
+        }
+
         // HTTP tests replace the publisher and do not need a real broker or workers.
         services.AddSingleton<IHostedService>(serviceProvider =>
-            IsTestingEnvironment(serviceProvider)
-                ? new TestingMessagingHostedService()
-                : serviceProvider.GetRequiredService<RabbitMqMessagingInitializer>()
-        );
-
-        // This service is registered after setup, so normal host startup begins workers later.
-        services.AddSingleton<IHostedService>(serviceProvider =>
-            IsTestingEnvironment(serviceProvider)
+            environment.IsEnvironment("Testing")
                 ? new TestingMessagingHostedService()
                 : serviceProvider.GetRequiredService<EventParserConsumer>()
         );
 
         return services;
-    }
-
-    private static bool IsTestingEnvironment(IServiceProvider serviceProvider)
-    {
-        return serviceProvider.GetRequiredService<IHostEnvironment>().IsEnvironment("Testing");
     }
 }

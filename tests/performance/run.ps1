@@ -38,8 +38,8 @@ New-Item -ItemType Directory -Path $resultDirectory -ErrorAction Stop | Out-Null
 Write-Output $resultDirectory
 
 $composeProjectName = 'pulseflow-performance'
-$livenessUri = 'http://localhost:5254/health/live'
-$livenessPollInterval = [TimeSpan]::FromSeconds(2)
+$readinessUri = 'http://localhost:5254/health/ready'
+$readinessPollInterval = [TimeSpan]::FromSeconds(2)
 $rabbitMqMetricsUri = 'http://localhost:15692/metrics/detailed?family=queue_coarse_metrics'
 $rabbitMqMetricsPollIntervalSeconds = 2
 $downstreamCompletionTimeout = [TimeSpan]::FromMinutes(5)
@@ -343,20 +343,22 @@ try {
         throw "Failed to build and start the '$composeProjectName' Compose stack."
     }
 
-    # Wait for a serving API so later performance steps do not measure startup time or transient connection failures.
-    Write-Host 'Waiting for the API liveness endpoint...'
-    $apiIsLive = $false
+    # Wait for completed initialization so k6 never performs first-request infrastructure work.
+    Write-Host 'Waiting for the API readiness endpoint...'
+    $apiIsReady = $false
 
-    while (-not $apiIsLive) {
+    while (-not $apiIsReady) {
         try {
-            $response = Invoke-WebRequest -Uri $livenessUri -Method Get
-            if ($response.StatusCode -ne 200) {
-                throw "The API liveness endpoint returned HTTP $($response.StatusCode)."
+            $response = Invoke-WebRequest -Uri $readinessUri -Method Get -SkipHttpErrorCheck
+            if ($response.StatusCode -eq 200) {
+                Write-Host 'API is ready.'
+                $apiIsReady = $true
+                break
             }
 
-            Write-Host 'API is live.'
-            $apiIsLive = $true
-            break
+            if ($response.StatusCode -ne 503) {
+                throw "The API readiness endpoint returned HTTP $($response.StatusCode)."
+            }
         }
         catch {
             $isConnectionError = $_.CategoryInfo.Category -eq 'ConnectionError'
@@ -371,7 +373,7 @@ try {
             # The API may not have bound its port yet or may have closed a request while starting.
         }
 
-        Start-Sleep -Seconds $livenessPollInterval.TotalSeconds
+        Start-Sleep -Seconds $readinessPollInterval.TotalSeconds
     }
 
     # Run the fixed baseline scenario and preserve its summary so the observed result can be reviewed later.

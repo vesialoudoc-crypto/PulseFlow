@@ -29,8 +29,9 @@ For every run, the runner:
 
 1. Removes any prior `pulseflow-performance` Compose stack and its volumes, then
    creates a fresh stack under that isolated Compose project name.
-2. Waits until `http://localhost:5254/health/live` returns HTTP 200 before starting
-   the load scenario.
+2. Waits until `http://localhost:5254/health/ready` returns HTTP 200 before starting
+   the load scenario. This includes mandatory infrastructure initialization and parser
+   consumer registration, so k6 does not perform first-request initialization work.
 3. Starts RabbitMQ backlog and container-resource sampling, then runs
    `ingestion-baseline.js` with k6 and saves the k6 summary.
 4. Waits for the RabbitMQ ingestion queue to drain, then reads the final persisted

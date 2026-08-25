@@ -1,4 +1,3 @@
-using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.Options;
 using Microsoft.OpenApi;
 using PulseFlow.Api.Health;
@@ -11,6 +10,7 @@ using PulseFlow.Api.Ingestion.RateLimiting;
 using PulseFlow.Api.Ingestion.Validation;
 using PulseFlow.Api.Persistence;
 using PulseFlow.Api.Persistence.Events;
+using PulseFlow.Api.Startup;
 
 var builder = WebApplication.CreateBuilder(args);
 
@@ -22,6 +22,7 @@ if (connectionString is null)
 
 builder.Services.AddControllers();
 
+builder.Services.AddStartupInitialization();
 builder.Services.AddPulseFlowHealthChecks();
 
 builder.Services.AddProblemDetails();
@@ -33,14 +34,14 @@ builder
     .ValidateDataAnnotations()
     .ValidateOnStart();
 
-builder.Services.AddDbContext<PulseFlowDbContext>(options => options.UseNpgsql(connectionString));
+builder.Services.AddPulseFlowPersistence(connectionString, builder.Environment);
 
 builder.Services.AddSingleton<NdjsonRecordReader>();
 builder.Services.AddSingleton<EventEnvelopeValidator>();
 
 builder.Services.AddScoped<IEventChunkStore, EfCoreEventChunkStore>();
-builder.Services.AddIngestionMessaging(builder.Configuration);
-builder.Services.AddIngestionRateLimiting(builder.Configuration);
+builder.Services.AddIngestionMessaging(builder.Configuration, builder.Environment);
+builder.Services.AddIngestionRateLimiting(builder.Configuration, builder.Environment);
 
 builder.Services.AddScoped<IngestEventsHandler>(services =>
 {

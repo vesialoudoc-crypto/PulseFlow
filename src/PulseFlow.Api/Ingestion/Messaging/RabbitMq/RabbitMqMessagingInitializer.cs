@@ -1,8 +1,8 @@
-using Microsoft.Extensions.Hosting;
+using PulseFlow.Api.Startup;
 
 namespace PulseFlow.Api.Ingestion.Messaging.RabbitMq;
 
-internal sealed class RabbitMqMessagingInitializer : IHostedService
+internal sealed class RabbitMqMessagingInitializer : IStartupInitializer
 {
     private readonly RabbitMqConnectionManager _connectionManager;
     private readonly RabbitMqIngestionBatchPublisher _publisher;
@@ -16,12 +16,10 @@ internal sealed class RabbitMqMessagingInitializer : IHostedService
         _publisher = publisher;
     }
 
-    public async Task StartAsync(CancellationToken cancellationToken)
+    public async Task InitializeAsync(CancellationToken ct)
     {
-        // Make broker problems visible before the API starts taking traffic.
-        await _connectionManager.InitializeAsync(cancellationToken);
-        await _publisher.InitializeAsync(cancellationToken);
+        // Topology and the publisher pool are established once before the API is ready.
+        await _connectionManager.InitializeAsync(ct);
+        await _publisher.InitializeAsync(ct);
     }
-
-    public Task StopAsync(CancellationToken cancellationToken) => Task.CompletedTask;
 }
