@@ -263,6 +263,14 @@ to whole delta seconds; an unavailable result returns HTTP 503. Focused HTTP tes
 verify these mappings, confirm that rejected requests do not call the publisher, and
 confirm that an allowed request is published and returns HTTP 202.
 
+Two explicit local measurement topologies are accepted. Single remains the direct
+`client -> api` control. Multi uses HAProxy as its only public HTTP entry point and
+routes round-robin across healthy internal `api-1` and `api-2` replicas; both API
+processes also host one RabbitMQ consumer when `RabbitMq:ConsumerCount = 1`. Both
+topologies share PostgreSQL, RabbitMQ, and Redis. This local choice does not select
+the future cloud/AWS ingress. See
+[ADR 0016](decisions/0016-use-haproxy-for-local-multi-instance-api-ingress.md).
+
 The reproducible load-test harness is available at
 [`tests/performance/ingestion-baseline.js`](../tests/performance/ingestion-baseline.js). It uses a closed model
 with configurable VUs and duration, posts one valid Event Contract v2 NDJSON record
@@ -283,6 +291,17 @@ local-run instructions require a high enough local rate-limit quota to prevent H
 429 from becoming the limiting factor. Stage 4 remains in progress, and no
 bottleneck conclusion, target, or optimization decision has been made.
 
+[Ingestion Single vs Multi Comparison 001](performance/ingestion-single-vs-multi-001.md)
+records the completed controlled `10 VU / 10s`, `20 VU / 10s`, and `30 VU / 10s`
+comparison. It found Multi accepted approximately 16-22% more HTTP requests per
+second at 20 and 30 VUs, but no improvement at 10 VUs. Every valid measured run had
+0% HTTP failures and equal accepted HTTP 202 and final persisted-row counts. This is
+not an isolated HTTP/API scaling measurement: Multi changes both the API-process
+count and RabbitMQ-consumer count from one to two. The substantial RabbitMQ backlog
+after each ten-second acceptance burst means HTTP acceptance throughput is not a
+measure of sustainable end-to-end persistence throughput. No linear-scaling,
+production-capacity, or proven-bottleneck conclusion is accepted from this experiment.
+
 The startup-readiness slice is implemented. The process exposes a dependency-free
 `GET /health/live` endpoint and a tagged ASP.NET Core `GET /health/ready` endpoint.
 Readiness requires successful one-time PostgreSQL, RabbitMQ, and Redis initialization,
@@ -290,8 +309,21 @@ completed parser-consumer subscription, and current side-effect-free dependency 
 checks. Runtime dependency failure makes readiness return HTTP 503 without rerunning
 global initialization. The API checks that migrations are current but never executes
 migrations; the Compose migrations service remains responsible for applying them.
-`tests/performance/run.ps1` now waits for readiness rather than using traffic or a
-delay to initialize the ingestion path. See [ADR 0015](decisions/0015-separate-startup-initialization-from-runtime-readiness.md).
+
+HAProxy active health checks use `/health/ready`, so its Multi ingress sends client
+traffic only to replicas that have completed mandatory initialization and whose
+runtime dependencies are healthy. Before it starts samplers or fixed 10-second k6,
+`tests/performance/run.ps1` waits for `Single`'s API readiness endpoint or directly
+probes both `Multi` replicas' readiness endpoints through the internal Compose network.
+Multi starts measurement only when both replicas return HTTP 200 in the same polling
+cycle; each probe has a one-second timeout within the two-minute overall startup
+deadline. It does not use a synthetic ingestion POST, row deletion, Redis-key deletion,
+or an arbitrary sleep as its readiness mechanism. Multi also preserves HAProxy-log
+evidence that both replicas received measured client POST traffic. See
+[ADR 0015](decisions/0015-separate-startup-initialization-from-runtime-readiness.md),
+[ADR 0016](decisions/0016-use-haproxy-for-local-multi-instance-api-ingress.md), and
+[ADR 0017](decisions/0017-warm-full-ingestion-path-before-performance-baseline.md)
+for the superseded diagnostic warm-up history.
 
 ### Do Not Decide in Advance
 

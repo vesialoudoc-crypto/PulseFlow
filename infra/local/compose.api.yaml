@@ -1,0 +1,32 @@
+# This service is an extension template, not a runnable topology on its own.
+# `compose.single.yaml` and `compose.multi.yaml` inherit it to keep API settings
+# identical across the single instance and both replicas.
+services:
+  api:
+    build:
+      context: ../..
+      dockerfile: src/PulseFlow.Api/Dockerfile
+      target: final
+    environment:
+      ASPNETCORE_URLS: "http://+:8080"
+
+      ConnectionStrings__PulseFlow: Host=postgres;Port=5432;Database=pulseflow;Username=pulseflow;Password=pulseflow-local-password
+      ConnectionStrings__RabbitMq: amqp://pulseflow:pulseflow-local-password@rabbitmq:5672/
+      ConnectionStrings__Redis: redis:6379,abortConnect=false
+
+      RabbitMq__QueueName: pulseflow.ingestion-batches
+      RabbitMq__ConsumerCount: 1
+      RabbitMq__PublisherChannelCount: 4
+
+      Ingestion__ChunkCapacity: 100
+
+      IngestionRateLimit__RequestLimit: 10000000
+      IngestionRateLimit__WindowDuration: "00:01:00"
+    depends_on:
+      # Migrations must finish before an API instance accepts requests.
+      rabbitmq:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      migrations:
+        condition: service_completed_successfully

@@ -421,10 +421,21 @@ connections or channels, declare topology, publish, run migrations, load the rat
 Lua resource, or rerun any startup initializer. A post-start dependency failure returns
 HTTP 503 from readiness while the startup state remains `Ready`.
 
-The performance runner waits for `/health/ready == 200` before it starts k6. Therefore,
-the first k6 ingestion request does not create the Redis multiplexer, load the limiter
-Lua script, establish RabbitMQ topology, create publisher channels, or subscribe parser
-workers.
+The performance runner uses readiness as the pre-measurement boundary before it starts
+samplers or k6. In Single, it polls the API's public `/health/ready` endpoint. In
+Multi, it uses HAProxy's internal Compose network to poll `/health/ready` on both
+`api-1` and `api-2`; both must return HTTP 200 in the same polling cycle. It does not
+retain a prior success or infer two-replica readiness from one success through the
+load-balanced public ingress. Every readiness probe has a one-second timeout, and the
+overall startup deadline remains two minutes. HAProxy itself actively health-checks
+`/health/ready`, retaining round-robin routing while excluding an alive but unready
+replica from client traffic. The runner records HAProxy log-derived measured POST
+counts for both replicas and fails a Multi run unless both received traffic.
+
+No synthetic ingestion warm-up POST, PostgreSQL-row deletion, or Redis-key deletion
+precedes the fixed 10-second workload. Therefore, the first k6 ingestion request does
+not create the Redis multiplexer, load the limiter Lua script, establish RabbitMQ
+topology, create publisher channels, or subscribe parser workers.
 
 ## Not yet defined
 

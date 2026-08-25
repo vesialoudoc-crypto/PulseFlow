@@ -1,0 +1,72 @@
+services:
+  # Service names are also host names inside the Compose network. For example, the
+  # API connects to PostgreSQL using the name `postgres`, not localhost.
+  postgres:
+    # PostgreSQL is the durable event store. Its named volume keeps local data when
+    # containers are recreated.
+    image: postgres:18.4-alpine
+    environment:
+      POSTGRES_DB: pulseflow
+      POSTGRES_USER: pulseflow
+      POSTGRES_PASSWORD: pulseflow-local-password
+    volumes:
+      - postgres_data:/var/lib/postgresql
+    healthcheck:
+      # Other services wait until PostgreSQL can accept connections.
+      test: ["CMD", "pg_isready", "-U", "pulseflow", "-d", "pulseflow"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  rabbitmq:
+    # RabbitMQ transfers accepted batches from the API to parser workers.
+    image: rabbitmq:4.1-alpine
+    environment:
+      RABBITMQ_DEFAULT_USER: pulseflow
+      RABBITMQ_DEFAULT_PASS: pulseflow-local-password
+    volumes:
+      - rabbitmq_data:/var/lib/rabbitmq
+    ports:
+      # Keep the default for normal local use. The performance runner supplies a
+      # different value so its isolated project can coexist with a normal stack.
+      - "${PULSEFLOW_RABBITMQ_METRICS_PORT:-15692}:15692"
+    healthcheck:
+      test: ["CMD", "rabbitmq-diagnostics", "-q", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+  redis:
+    # Redis holds the shared rate-limit state, so both API containers use one quota.
+    image: redis:8.4-alpine
+    volumes:
+      - redis_data:/data
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+
+  migrations:
+    # This short-lived container updates the database schema, then exits successfully.
+    # The API containers wait for that successful exit before starting.
+    build:
+      context: ../..
+      dockerfile: src/PulseFlow.Api/Dockerfile
+      target: migrations
+    depends_on:
+      postgres:
+        condition: service_healthy
+    restart: "no"
+    command:
+      - dotnet
+      - ef
+      - database
+      - update
+      - --connection
+      - Host=postgres;Port=5432;Database=pulseflow;Username=pulseflow;Password=pulseflow-local-password
+
+volumes:
+  # Named volumes are managed by Docker and preserve local state between container recreations.
+  postgres_data:
+  rabbitmq_data:
+  redis_data:

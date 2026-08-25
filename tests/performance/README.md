@@ -9,40 +9,69 @@ ingestion-pressure scenario with no performance thresholds.
 
 Install [Docker](https://docs.docker.com/get-docker/) and
 [Grafana k6](https://grafana.com/docs/k6/latest/set-up/install-k6/), then run this
-command from the repository root:
+command from the repository root with an explicit topology:
 
 ```powershell
-pwsh .\tests\performance\run.ps1
+pwsh .\tests\performance\run.ps1 -Topology Single
+pwsh .\tests\performance\run.ps1 -Topology Multi
 ```
 
-The runner uses the scenario defaults of 10 virtual users for 30 seconds. To adjust
-the load for a local experiment, set `VUS` and `DURATION` in the current shell before
-running the command:
+`Single` targets one `api` service. `Multi` targets HAProxy and its `api-1` and
+`api-2` backends. This accepted local topology is documented in
+[ADR 0016](../../docs/decisions/0016-use-haproxy-for-local-multi-instance-api-ingress.md).
+The runner never guesses a topology. To verify the selected Compose service set
+without requiring or running k6, use:
+
+```powershell
+pwsh .\tests\performance\run.ps1 -Topology Single -ValidateTopology
+pwsh .\tests\performance\run.ps1 -Topology Multi -ValidateTopology
+```
+
+The ingestion baseline duration is fixed at 10 seconds so runs remain directly
+comparable. Do not change duration when recording baselines. To adjust the load for a
+local experiment, set only `VUS` in the current shell before running the command:
 
 ```powershell
 $env:VUS = '20'
-$env:DURATION = '1m'
-pwsh .\tests\performance\run.ps1
+pwsh .\tests\performance\run.ps1 -Topology Single
 ```
 
 For every run, the runner:
 
-1. Removes any prior `pulseflow-performance` Compose stack and its volumes, then
-   creates a fresh stack under that isolated Compose project name.
-2. Waits until `http://localhost:5254/health/ready` returns HTTP 200 before starting
-   the load scenario. This includes mandatory infrastructure initialization and parser
-   consumer registration, so k6 does not perform first-request initialization work.
+1. Removes the prior isolated Compose project for the selected topology and its
+   volumes, then creates a fresh `pulseflow-performance-single` or
+   `pulseflow-performance-multi` stack.
+2. Uses topology-specific isolated ingress ports (`5255` for Single, `5256` for
+   Multi) and RabbitMQ metrics ports (`15693` and `15694`), avoiding conflicts with
+   the normal local stack's `5254` and `15692` ports. Single waits for its public
+   `/health/ready` endpoint. Multi probes `/health/ready` on both `api-1` and `api-2`
+   through HAProxy's internal Compose network; both must return HTTP 200 in the same
+   readiness evaluation cycle. One successful request through the load-balanced public
+   ingress is not considered proof that both replicas are ready. Each readiness probe
+   has a one-second timeout within the overall two-minute startup deadline.
 3. Starts RabbitMQ backlog and container-resource sampling, then runs
    `ingestion-baseline.js` with k6 and saves the k6 summary.
-4. Waits for the RabbitMQ ingestion queue to drain, then reads the final persisted
+4. For Multi, records HAProxy log-derived counts proving measured client POST traffic
+   reached both `api-1` and `api-2`; a run fails if either count is zero.
+5. Waits for the RabbitMQ ingestion queue to drain, then reads the final persisted
    row count from PostgreSQL.
-5. Removes the `pulseflow-performance` Compose stack and its volumes when the run
-   ends, including when startup or k6 fails after the stack has been started.
+6. Removes the selected isolated performance Compose stack and its volumes when the
+   run ends, including when startup or k6 fails after the stack has been started.
 
 The local Compose configuration keeps the Redis limiter enabled with a local-only
 quota high enough that HTTP 429 is not expected to limit the default scenario.
+The runner does not send a synthetic ingestion warm-up event or delete a warm-up row
+or Redis limiter key. Application-owned readiness is the measurement boundary; its
+lifecycle is documented in
+[ADR 0015](../../docs/decisions/0015-separate-startup-initialization-from-runtime-readiness.md).
 
 ## Result artifacts
+
+[Ingestion Single vs Multi Comparison 001](../../docs/performance/ingestion-single-vs-multi-001.md)
+records the completed controlled 10/20/30-VU comparison of the accepted Single and
+Multi topologies. Historical [Baseline 001](../../docs/performance/ingestion-baseline-001.md)
+and [Baseline 002](../../docs/performance/ingestion-baseline-002.md) remain separate
+records.
 
 Each run creates a timestamped directory:
 
@@ -59,6 +88,8 @@ It contains:
   which it was captured.
 - `containers.csv` — periodic CPU and memory samples for the local Compose
   containers.
+- `multi-replica-post-traffic.txt` — for Multi only, HAProxy log-derived measured
+  client POST counts for `api-1` and `api-2`.
 
 `rabbitmq.csv` has the following columns:
 
@@ -78,7 +109,8 @@ persistence work for that run.
 
 - `timestamp_utc` — UTC time at which the sample was captured, in ISO 8601 format.
 - `service` — the Compose service that produced the sample: `api`, `rabbitmq`,
-  `redis`, or `postgres`.
+  `redis`, and `postgres` for Single; `haproxy`, `api-1`, `api-2`, `rabbitmq`,
+  `redis`, and `postgres` for Multi.
 - `cpu_percent` — the container CPU utilization reported by Docker, as a percentage.
 - `memory_usage_mb` — the container memory usage reported by Docker, in megabytes.
 
@@ -95,5 +127,5 @@ API -> Redis rate limiter -> RabbitMQ publisher confirmation -> HTTP 202
 
 PostgreSQL persistence occurs asynchronously after RabbitMQ. The k6 summary and
 RabbitMQ samples do not, by themselves, establish PostgreSQL persistence throughput
-or identify a bottleneck. No official performance baseline, performance target, or
-optimization decision has been made yet.
+or identify a bottleneck. The controlled comparison does not set a performance target
+or an optimization decision.
