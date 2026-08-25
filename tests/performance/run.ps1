@@ -33,6 +33,11 @@ if ($LASTEXITCODE -ne 0) {
     throw 'Docker is unavailable. Start Docker Desktop or Docker Engine, then run this script again.'
 }
 
+$curlCommand = Get-Command curl.exe -ErrorAction SilentlyContinue
+if ($null -eq $curlCommand) {
+    throw 'curl.exe is unavailable. Install curl, then run this script again.'
+}
+
 # Give each future run a separate, timestamped location for reproducible artifacts.
 $timestamp = Get-Date -Format 'yyyyMMdd-HHmmss-fff'
 $resultsDirectory = Join-Path $PSScriptRoot 'results'
@@ -432,26 +437,26 @@ try {
     if ($Topology -eq 'Single') {
         Write-Host "Waiting for Single API readiness at '$readinessUri'..."
         while ($true) {
-            try {
-                $response = Invoke-WebRequest -Uri $readinessUri -Method Get -SkipHttpErrorCheck `
-                    -TimeoutSec $readinessProbeTimeoutSeconds
-                if ($response.StatusCode -eq 200) {
+            $curlOutput = & $curlCommand.Source `
+                --silent `
+                --show-error `
+                --output NUL `
+                --write-out '%{http_code}' `
+                --connect-timeout $readinessProbeTimeoutSeconds `
+                --max-time $readinessProbeTimeoutSeconds `
+                --request GET `
+                $readinessUri 2>$null
+            $curlExitCode = $LASTEXITCODE
+
+            if ($curlExitCode -eq 0) {
+                $statusCode = ($curlOutput | Out-String).Trim()
+                if ($statusCode -eq '200') {
                     Write-Host 'Single API is ready.'
                     break
                 }
 
-                if ($response.StatusCode -ne 503) {
-                    throw "The Single API readiness endpoint returned HTTP $($response.StatusCode)."
-                }
-            }
-            catch {
-                $isConnectionError = $_.CategoryInfo.Category -eq 'ConnectionError'
-                $isResponseEnded =
-                    $_.FullyQualifiedErrorId -like '*ResponseEnded*' -or
-                    $_.ErrorDetails.Message -like '*ResponseEnded*'
-
-                if (-not ($isConnectionError -or $isResponseEnded)) {
-                    throw
+                if ($statusCode -ne '503') {
+                    throw "The Single API readiness endpoint returned HTTP $statusCode."
                 }
             }
 
