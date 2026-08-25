@@ -368,6 +368,8 @@ implement deployment, then investigate and optimize a measured deployed constrai
 
 ### Goals
 
+- Establish the first cheap, replaceable staging environment for deployment practice,
+  infrastructure automation, and later deployed measurements.
 - Select a minimal AWS architecture based on the already working system.
 - Automate the creation or configuration of the required infrastructure.
 - Configure secure storage for configuration and secrets.
@@ -417,9 +419,28 @@ and other environment-specific configuration at runtime. It is intended to be re
 unchanged by local and future staging/cloud deployment environments; no staging or
 cloud infrastructure is defined by this publication step.
 
+The first staging architecture is now accepted: Render is the disposable staging
+platform, while AWS remains the final cloud target. Render staging will consume an
+immutable GHCR SHA-tagged API image, use Render-owned public HTTPS ingress, managed
+PostgreSQL, Redis-compatible Key Value storage, and a separate persistent RabbitMQ
+service over private normal application connectivity. HAProxy remains local-only.
+`/health/ready` is the staging traffic-readiness endpoint. The detailed topology,
+operator-access boundary, persistence lifecycle, migration invariant, and current
+API/consumer coupling are recorded in
+[First Staging Environment Architecture](architecture/staging-environment.md) and
+[ADR 0018](decisions/0018-use-render-for-first-disposable-staging-environment.md).
+
+This is a documentation decision only: Render resources, Terraform/OpenTofu,
+deployment automation, and migration packaging/execution have not been implemented.
+The immediate deployment prerequisite is a mechanism that applies pending EF Core
+migrations exactly once in Render's pre-deploy lifecycle before the new API version
+receives traffic.
+
 ### Do Not Decide in Advance
 
-Specific AWS services, the number of environments, network topology, or release strategy before the stage requirements and costs have been assessed.
+Specific AWS services, final AWS network topology, final release strategy, and API and
+RabbitMQ-consumer decoupling remain undecided. The first Render staging topology is
+accepted but does not decide those final-cloud concerns.
 
 ## Stage 6: Production Hardening
 
