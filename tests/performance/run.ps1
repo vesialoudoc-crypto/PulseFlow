@@ -70,6 +70,7 @@ $composeProjectName = $topologyConfiguration.ComposeProjectName
 $resourceServices = $topologyConfiguration.ResourceServices
 $readinessUri = "http://localhost:$($topologyConfiguration.IngressPort)/health/ready"
 $readinessPollInterval = [TimeSpan]::FromSeconds(2)
+$readinessTimeout = [TimeSpan]::FromMinutes(2)
 $rabbitMqMetricsUri = "http://localhost:$($topologyConfiguration.RabbitMqMetricsPort)/metrics/detailed?family=queue_coarse_metrics"
 $expectedComposeServices = @($resourceServices + 'migrations' | Sort-Object)
 
@@ -425,6 +426,8 @@ try {
 
     # Readiness is application-owned. It completes only after mandatory startup work
     # and parser-consumer registration, so k6 never performs first-request initialization.
+    # The deadline bounds a failed startup; it is not a substitute for HTTP 200 readiness.
+    $readinessDeadline = [DateTime]::UtcNow.Add($readinessTimeout)
     if ($Topology -eq 'Single') {
         Write-Host "Waiting for Single API readiness at '$readinessUri'..."
         while ($true) {
@@ -448,6 +451,10 @@ try {
                 if (-not ($isConnectionError -or $isResponseEnded)) {
                     throw
                 }
+            }
+
+            if ([DateTime]::UtcNow -ge $readinessDeadline) {
+                throw "Topology '$Topology' API readiness at '$readinessUri' did not return HTTP 200 within $($readinessTimeout.TotalMinutes) minutes."
             }
 
             Start-Sleep -Seconds $readinessPollInterval.TotalSeconds
@@ -476,6 +483,13 @@ try {
             }
 
             if ($readyReplicaServices.Count -lt $multiReplicaServices.Count) {
+                if ([DateTime]::UtcNow -ge $readinessDeadline) {
+                    $unreadyReplicaServices = @(
+                        $multiReplicaServices | Where-Object { -not $readyReplicaServices.Contains($_) }
+                    )
+                    throw "Topology '$Topology' API replicas did not become ready within $($readinessTimeout.TotalMinutes) minutes: $($unreadyReplicaServices -join ', ')."
+                }
+
                 Start-Sleep -Seconds $readinessPollInterval.TotalSeconds
             }
         }
