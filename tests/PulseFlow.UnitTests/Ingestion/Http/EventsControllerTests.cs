@@ -1,7 +1,6 @@
+using System.Buffers;
 using Microsoft.AspNetCore.Http;
 using Microsoft.AspNetCore.Mvc;
-using Microsoft.Extensions.Options;
-using PulseFlow.Api.Ingestion;
 using PulseFlow.Api.Ingestion.Http;
 using PulseFlow.Api.Ingestion.Messaging;
 using PulseFlow.Api.Ingestion.RateLimiting;
@@ -26,75 +25,114 @@ public sealed class EventsControllerTests
     }
 
     [Fact]
-    public async Task IngestAsync_ContentLengthExceedsLimit_DoesNotReadRequestBodyOrPublish()
+    public async Task IngestAsync_BodyReaderReturnsTooLarge_ReturnsPayloadTooLargeAndDoesNotPublish()
     {
         // Arrange
-        const long maxBatchBytes = 4;
-        var requestBody = new ThrowOnReadStream();
         var publisher = new RecordingIngestionBatchPublisher();
-        var controller = CreateController(publisher, requestBody, maxBatchBytes, maxBatchBytes + 1);
+        var controller = CreateController(
+            publisher,
+            new StubIngestionBatchBodyReader(_ => Task.FromResult(IngestionBatchBodyReadResult.TooLarge())));
 
         // Act
         var result = await controller.IngestAsync(CancellationToken.None);
 
         // Assert
         var problemDetails = AssertPayloadTooLargeProblem(result, controller.HttpContext.TraceIdentifier);
-        Assert.Equal(0, requestBody.ReadAttemptCount);
         Assert.Equal(0, publisher.PublishCallCount);
         Assert.Equal("The request body exceeds the maximum allowed batch size.", problemDetails.Detail);
     }
 
     [Fact]
-    public async Task IngestAsync_UnknownLengthBodyExceedsLimit_StopsAfterFirstExcessByteAndDoesNotPublish()
+    public async Task IngestAsync_BodyReaderReturnsPayload_PublishesExactBytes()
     {
         // Arrange
-        const long maxBatchBytes = 4;
-        var requestBody = new ByteSequenceStream(CreatePayload((int)maxBatchBytes + 1), maximumBytesPerRead: 1);
+        var expectedPayload = CreatePayload(4);
+        var pool = new TrackingArrayPool();
         var publisher = new RecordingIngestionBatchPublisher();
-        var controller = CreateController(publisher, requestBody, maxBatchBytes, contentLength: null);
+        var controller = CreateController(
+            publisher,
+            new StubIngestionBatchBodyReader(_ => Task.FromResult(CreateSuccessfulResult(pool, expectedPayload))));
 
         // Act
         var result = await controller.IngestAsync(CancellationToken.None);
 
         // Assert
-        var problemDetails = AssertPayloadTooLargeProblem(result, controller.HttpContext.TraceIdentifier);
-        Assert.Equal(maxBatchBytes + 1, requestBody.BytesRead);
-        Assert.Equal(0, publisher.PublishCallCount);
-        Assert.Equal("Payload Too Large", problemDetails.Title);
+        Assert.IsType<AcceptedResult>(result);
+        Assert.Equal(expectedPayload, publisher.PublishedPayload);
     }
 
     [Fact]
-    public async Task IngestAsync_ContentLengthAtLimitButBodyExceedsLimit_ReturnsPayloadTooLarge()
+    public async Task IngestAsync_PublisherCompletes_ReturnsReaderBufferAfterPublication()
     {
         // Arrange
-        const long maxBatchBytes = 4;
-        var requestBody = new ByteSequenceStream(CreatePayload((int)maxBatchBytes + 1), maximumBytesPerRead: 1);
-        var publisher = new RecordingIngestionBatchPublisher();
-        var controller = CreateController(publisher, requestBody, maxBatchBytes, contentLength: maxBatchBytes);
+        var pool = new TrackingArrayPool();
+        var publisher = new BlockingIngestionBatchPublisher();
+        var controller = CreateController(
+            publisher,
+            new StubIngestionBatchBodyReader(_ => Task.FromResult(CreateSuccessfulResult(pool, CreatePayload(4)))));
 
         // Act
-        var result = await controller.IngestAsync(CancellationToken.None);
+        var ingestionTask = controller.IngestAsync(CancellationToken.None);
+        await publisher.PublishStarted.Task;
 
         // Assert
-        AssertPayloadTooLargeProblem(result, controller.HttpContext.TraceIdentifier);
-        Assert.Equal(maxBatchBytes + 1, requestBody.BytesRead);
-        Assert.Equal(0, publisher.PublishCallCount);
+        Assert.Empty(pool.ReturnedBuffers);
+
+        publisher.CompletePublication();
+        await ingestionTask;
+
+        Assert.Single(pool.ReturnedBuffers);
     }
 
     [Fact]
-    public async Task IngestAsync_RequestAbortedDuringRead_PropagatesCancellation()
+    public async Task IngestAsync_PublisherSucceeds_ReturnsReaderBuffer()
+    {
+        // Arrange
+        var pool = new TrackingArrayPool();
+        var publisher = new RecordingIngestionBatchPublisher();
+        var controller = CreateController(
+            publisher,
+            new StubIngestionBatchBodyReader(_ => Task.FromResult(CreateSuccessfulResult(pool, CreatePayload(4)))));
+
+        // Act
+        await controller.IngestAsync(CancellationToken.None);
+
+        // Assert
+        Assert.Single(pool.ReturnedBuffers);
+    }
+
+    [Fact]
+    public async Task IngestAsync_PublisherThrows_ReturnsReaderBuffer()
+    {
+        // Arrange
+        var pool = new TrackingArrayPool();
+        var publisher = new RecordingIngestionBatchPublisher(new InvalidOperationException("Publisher failure."));
+        var controller = CreateController(
+            publisher,
+            new StubIngestionBatchBodyReader(_ => Task.FromResult(CreateSuccessfulResult(pool, CreatePayload(4)))));
+
+        // Act
+        await Assert.ThrowsAsync<InvalidOperationException>(() => controller.IngestAsync(CancellationToken.None));
+
+        // Assert
+        Assert.Single(pool.ReturnedBuffers);
+    }
+
+    [Fact]
+    public async Task IngestAsync_BodyReaderIsCanceled_PropagatesCancellation()
     {
         // Arrange
         using var cancellationTokenSource = new CancellationTokenSource();
-        var requestBody = new ThrowOnCancellationStream();
-        var publisher = new RecordingIngestionBatchPublisher();
-        var controller = CreateController(publisher, requestBody, maxBatchBytes: 4, contentLength: null);
-        controller.HttpContext.RequestAborted = cancellationTokenSource.Token;
         cancellationTokenSource.Cancel();
+        var publisher = new RecordingIngestionBatchPublisher();
+        var controller = CreateController(
+            publisher,
+            new StubIngestionBatchBodyReader(_ =>
+                Task.FromCanceled<IngestionBatchBodyReadResult>(cancellationTokenSource.Token)));
 
         // Act
         var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
-            controller.IngestAsync(controller.HttpContext.RequestAborted));
+            controller.IngestAsync(cancellationTokenSource.Token));
 
         // Assert
         Assert.Equal(cancellationTokenSource.Token, exception.CancellationToken);
@@ -104,24 +142,27 @@ public sealed class EventsControllerTests
 
     private static EventsController CreateController(
         IIngestionBatchPublisher publisher,
-        Stream requestBody,
-        long maxBatchBytes,
-        long? contentLength
+        IIngestionBatchBodyReader bodyReader
     )
     {
         var httpContext = new DefaultHttpContext();
         httpContext.TraceIdentifier = "test-trace-id";
-        httpContext.Request.Body = requestBody;
-        httpContext.Request.ContentLength = contentLength;
 
-        return new EventsController(
-            publisher,
-            new AllowedIngestionRateLimiter(),
-            Options.Create(new IngestionOptions { ChunkCapacity = 1, MaxBatchBytes = maxBatchBytes })
-        )
+        return new EventsController(publisher, new AllowedIngestionRateLimiter(), bodyReader)
         {
             ControllerContext = new ControllerContext { HttpContext = httpContext },
         };
+    }
+
+    private static IngestionBatchBodyReadResult CreateSuccessfulResult(
+        TrackingArrayPool pool,
+        byte[] payload
+    )
+    {
+        var buffer = pool.Rent(payload.Length);
+        payload.CopyTo(buffer, 0);
+
+        return new IngestionBatchBodyReadResult(buffer, payload.Length, pool);
     }
 
     private static ProblemDetails AssertPayloadTooLargeProblem(IActionResult result, string traceIdentifier)
@@ -141,15 +182,65 @@ public sealed class EventsControllerTests
         return Enumerable.Range(0, length).Select(index => (byte)index).ToArray();
     }
 
+    private sealed class StubIngestionBatchBodyReader : IIngestionBatchBodyReader
+    {
+        private readonly Func<CancellationToken, Task<IngestionBatchBodyReadResult>> _readAsync;
+
+        public StubIngestionBatchBodyReader(
+            Func<CancellationToken, Task<IngestionBatchBodyReadResult>> readAsync
+        )
+        {
+            _readAsync = readAsync;
+        }
+
+        public Task<IngestionBatchBodyReadResult> ReadAsync(
+            Stream body,
+            long? contentLength,
+            CancellationToken cancellationToken
+        )
+        {
+            return _readAsync(cancellationToken);
+        }
+    }
+
     private sealed class RecordingIngestionBatchPublisher : IIngestionBatchPublisher
     {
+        private readonly Exception? _exception;
+
+        public RecordingIngestionBatchPublisher(Exception? exception = null)
+        {
+            _exception = exception;
+        }
+
         public int PublishCallCount { get; private set; }
+
+        public byte[]? PublishedPayload { get; private set; }
 
         public Task PublishAsync(ReadOnlyMemory<byte> rawBatch, CancellationToken ct)
         {
             PublishCallCount++;
+            PublishedPayload = rawBatch.ToArray();
 
-            return Task.CompletedTask;
+            return _exception is null ? Task.CompletedTask : Task.FromException(_exception);
+        }
+    }
+
+    private sealed class BlockingIngestionBatchPublisher : IIngestionBatchPublisher
+    {
+        private readonly TaskCompletionSource _publicationCompletion = new(
+            TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public TaskCompletionSource PublishStarted { get; } = new(TaskCreationOptions.RunContinuationsAsynchronously);
+
+        public async Task PublishAsync(ReadOnlyMemory<byte> rawBatch, CancellationToken ct)
+        {
+            PublishStarted.SetResult();
+            await _publicationCompletion.Task.WaitAsync(ct);
+        }
+
+        public void CompletePublication()
+        {
+            _publicationCompletion.SetResult();
         }
     }
 
@@ -161,174 +252,18 @@ public sealed class EventsControllerTests
         }
     }
 
-    private sealed class ThrowOnReadStream : Stream
+    private sealed class TrackingArrayPool : ArrayPool<byte>
     {
-        public int ReadAttemptCount { get; private set; }
+        public List<byte[]> ReturnedBuffers { get; } = [];
 
-        public override bool CanRead => true;
-
-        public override bool CanSeek => false;
-
-        public override bool CanWrite => false;
-
-        public override long Length => throw new NotSupportedException();
-
-        public override long Position
+        public override byte[] Rent(int minimumLength)
         {
-            get => throw new NotSupportedException();
-            set => throw new NotSupportedException();
+            return new byte[minimumLength];
         }
 
-        public override void Flush() { }
-
-        public override Task FlushAsync(CancellationToken cancellationToken)
+        public override void Return(byte[] array, bool clearArray = false)
         {
-            return Task.CompletedTask;
-        }
-
-        public override int Read(byte[] buffer, int offset, int count)
-        {
-            ReadAttemptCount++;
-            throw new InvalidOperationException("Request body must not be read.");
-        }
-
-        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
-        {
-            ReadAttemptCount++;
-            throw new InvalidOperationException("Request body must not be read.");
-        }
-
-        public override long Seek(long offset, SeekOrigin origin)
-        {
-            throw new NotSupportedException();
-        }
-
-        public override void SetLength(long value)
-        {
-            throw new NotSupportedException();
-        }
-
-        public override void Write(byte[] buffer, int offset, int count)
-        {
-            throw new NotSupportedException();
-        }
-    }
-
-    private sealed class ThrowOnCancellationStream : Stream
-    {
-        public override bool CanRead => true;
-
-        public override bool CanSeek => false;
-
-        public override bool CanWrite => false;
-
-        public override long Length => throw new NotSupportedException();
-
-        public override long Position
-        {
-            get => throw new NotSupportedException();
-            set => throw new NotSupportedException();
-        }
-
-        public override void Flush() { }
-
-        public override Task FlushAsync(CancellationToken cancellationToken)
-        {
-            return Task.CompletedTask;
-        }
-
-        public override int Read(byte[] buffer, int offset, int count)
-        {
-            throw new NotSupportedException();
-        }
-
-        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-            return ValueTask.FromResult(0);
-        }
-
-        public override long Seek(long offset, SeekOrigin origin)
-        {
-            throw new NotSupportedException();
-        }
-
-        public override void SetLength(long value)
-        {
-            throw new NotSupportedException();
-        }
-
-        public override void Write(byte[] buffer, int offset, int count)
-        {
-            throw new NotSupportedException();
-        }
-    }
-
-    private sealed class ByteSequenceStream : Stream
-    {
-        private readonly byte[] _payload;
-        private readonly int _maximumBytesPerRead;
-        private int _position;
-
-        public ByteSequenceStream(byte[] payload, int maximumBytesPerRead)
-        {
-            _payload = payload;
-            _maximumBytesPerRead = maximumBytesPerRead;
-        }
-
-        public long BytesRead => _position;
-
-        public override bool CanRead => true;
-
-        public override bool CanSeek => false;
-
-        public override bool CanWrite => false;
-
-        public override long Length => throw new NotSupportedException();
-
-        public override long Position
-        {
-            get => throw new NotSupportedException();
-            set => throw new NotSupportedException();
-        }
-
-        public override void Flush() { }
-
-        public override Task FlushAsync(CancellationToken cancellationToken)
-        {
-            return Task.CompletedTask;
-        }
-
-        public override int Read(byte[] buffer, int offset, int count)
-        {
-            throw new NotSupportedException();
-        }
-
-        public override ValueTask<int> ReadAsync(Memory<byte> buffer, CancellationToken cancellationToken = default)
-        {
-            cancellationToken.ThrowIfCancellationRequested();
-
-            var remainingBytes = _payload.Length - _position;
-            var bytesToRead = Math.Min(Math.Min(buffer.Length, _maximumBytesPerRead), remainingBytes);
-            _payload.AsSpan(_position, bytesToRead).CopyTo(buffer.Span);
-            _position += bytesToRead;
-
-            return ValueTask.FromResult(bytesToRead);
-        }
-
-        public override long Seek(long offset, SeekOrigin origin)
-        {
-            throw new NotSupportedException();
-        }
-
-        public override void SetLength(long value)
-        {
-            throw new NotSupportedException();
-        }
-
-        public override void Write(byte[] buffer, int offset, int count)
-        {
-            throw new NotSupportedException();
+            ReturnedBuffers.Add(array);
         }
     }
 

@@ -10,6 +10,8 @@ public static class IngestionServiceCollectionExtensions
             .ValidateDataAnnotations()
             .ValidateOnStart();
 
+        services.AddSingleton<Http.IIngestionBatchBodyReader, Http.PooledIngestionBatchBodyReader>();
+
         return services;
     }
 }

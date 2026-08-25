@@ -174,16 +174,25 @@ The generation decision is recorded in
 ## HTTP and application composition
 
 The implemented public boundary is `POST /api/events`, exposed by an ASP.NET Core
-controller and restricted to `application/x-ndjson`. The controller reads the raw
-request body into a gradually growing bounded buffer rented from `ArrayPool<byte>`
-and passes its exact filled range to
-`IIngestionBatchPublisher`; it does not invoke `NdjsonRecordReader`,
+controller and restricted to `application/x-ndjson`. `EventsController` coordinates
+rate limiting, `IIngestionBatchBodyReader`, HTTP results, and
+`IIngestionBatchPublisher`; it does not own buffering, invoke `NdjsonRecordReader`,
 `EventEnvelopeValidator`, `IngestEventsHandler`, or PostgreSQL persistence.
+
+The singleton `PooledIngestionBatchBodyReader` holds only startup-validated immutable
+configuration and the shared `ArrayPool<byte>`, so its per-request state is confined
+to `IngestionBatchBodyReadResult`. The reader owns gradual bounded buffering and
+returns a success result that owns the rented buffer and exposes only its exact
+filled `ReadOnlyMemory<byte>` range. The controller disposes that result only after
+`PublishAsync` completes, including when publishing fails. A too-large result has no
+buffer ownership; read errors and cancellation return the reader's current rented
+buffer before propagating the exception.
 
 `Ingestion:MaxBatchBytes` is a startup-validated positive `long` with a configured
 default of 10 MiB and a 100 MiB hard configuration cap. If `Content-Length` exceeds
-the configured limit, the controller returns HTTP 413 Problem Details before it reads
-the body or allocates the payload buffer. It does not trust a lower or absent
+the configured limit, the reader returns a technical too-large result before it reads
+the body or allocates the payload buffer, and the controller maps it to HTTP 413
+Problem Details. It does not trust a lower or absent
 `Content-Length`: it reads at most the configured byte count and one probe byte, then
 returns the same HTTP 413 response without publishing when that probe finds excess
 data. A body exactly at the limit is accepted. The initial pooled capacity is small
