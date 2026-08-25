@@ -216,7 +216,7 @@ manual and separately defined. Retry queues, Outbox, and prefetch remain unresol
 
 ## Stage 4: Horizontal Scaling and Load
 
-**Status:** In progress
+**Status:** Completed (local horizontal-scaling/load milestone)
 
 ### Goals
 
@@ -227,8 +227,7 @@ manual and separately defined. Retry queues, Outbox, and prefetch remain unresol
 - Reject an over-limit request with HTTP 429, with `Retry-After` where appropriate,
   before it is published to RabbitMQ.
 - Create a reproducible load scenario.
-- Find and measure at least one real bottleneck.
-- Compare behavior before and after a justified improvement.
+- Establish a controlled local Single-vs-Multi architecture and load baseline.
 
 ### Learning Objectives
 
@@ -241,7 +240,15 @@ manual and separately defined. Retry queues, Outbox, and prefetch remain unresol
 
 ### Expected Result
 
-The load test runs reproducibly and produces a clear report. The configuration, baseline metrics, identified constraint, change, and follow-up measurement are documented. Multiple `PulseFlow.Api` instances share Redis-backed rate-limit/quota state: process-local in-memory counters are not used because they would be incorrect when requests are distributed across instances. Redis stores this fast-changing operational state only; it is not the primary event store, generic cache, or batch-status store. Requests exceeding the accepted quota receive HTTP 429 and are not published to RabbitMQ. Multiple instances work correctly in the tested scenarios, and the limits of the conclusions are stated explicitly.
+The local load test runs reproducibly and produces a clear baseline report. Multiple
+`PulseFlow.Api` instances share Redis-backed rate-limit/quota state: process-local
+in-memory counters are not used because they would be incorrect when requests are
+distributed across instances. Redis stores this fast-changing operational state only;
+it is not the primary event store, generic cache, or batch-status store. Requests
+exceeding the accepted quota receive HTTP 429 and are not published to RabbitMQ.
+Applicable components work correctly in the tested multi-instance scenarios, and the
+limits of the conclusions are stated explicitly. This milestone does not establish
+production capacity, linear scaling, or a causal bottleneck.
 
 ### Current implementation
 
@@ -288,8 +295,8 @@ and `Ingestion:ChunkCapacity = 100`. The corrected runner verifies completion by
 requiring PostgreSQL's persisted event count to equal the k6 HTTP-202 acceptance
 count after the queue is empty. Every Baseline 002 row meets that invariant. Its
 local-run instructions require a high enough local rate-limit quota to prevent HTTP
-429 from becoming the limiting factor. Stage 4 remains in progress, and no
-bottleneck conclusion, target, or optimization decision has been made.
+429 from becoming the limiting factor. No bottleneck conclusion, target, or
+optimization decision is accepted from this local baseline.
 
 [Ingestion Single vs Multi Comparison 001](performance/ingestion-single-vs-multi-001.md)
 records the completed controlled `10 VU / 10s`, `20 VU / 10s`, and `30 VU / 10s`
@@ -325,15 +332,39 @@ evidence that both replicas received measured client POST traffic. See
 [ADR 0017](decisions/0017-warm-full-ingestion-path-before-performance-baseline.md)
 for the superseded diagnostic warm-up history.
 
+The local horizontal-scaling/load milestone is complete. It provides Redis-backed
+shared ingestion quota, multiple API instances behind HAProxy local ingress,
+readiness/liveness checks, a reproducible Single and Multi performance runner, and a
+controlled `10 / 20 / 30 VU` Single-vs-Multi comparison. Each valid measured run had
+0% HTTP failures and equal accepted HTTP 202 and persisted PostgreSQL-row counts. The
+comparison also documents that Multi doubles the co-hosted RabbitMQ-consumer count;
+therefore it does not isolate API/ingress scaling.
+
+Further local bottleneck attribution and tuning are deliberately deferred. API,
+RabbitMQ, PostgreSQL, Redis, and HAProxy share one Docker Desktop host and its CPU,
+RAM, disk, and virtualization resources, so another local optimization cycle would
+not reliably attribute a constraint to one component. The preserved objective is:
+
+```text
+local topology baseline -> deployment -> deployed load measurement
+-> bottleneck investigation -> justified improvement -> before/after
+```
+
+The bottleneck objective will be executed in the deployed-environment performance
+phase after a deployment architecture exists; it has not been deleted or satisfied by
+the local baseline. RabbitMQ backlog and CPU observations remain investigation leads,
+not proof that RabbitMQ is a bottleneck.
+
 ### Do Not Decide in Advance
 
-The exact number of instances and target performance metrics remain undecided. This
-first local baseline alone is not sufficient evidence to select either. Expanded load
-scenarios and measured quota values remain Stage 4 work.
+The exact number of instances and target performance metrics remain undecided. The
+local baseline is not sufficient evidence to select either. Do not resume local
+bottleneck optimization on the shared-host Docker Desktop topology; first design and
+implement deployment, then investigate and optimize a measured deployed constraint.
 
 ## Stage 5: Deployment to AWS
 
-**Status:** Not started
+**Status:** In progress (next active major stage)
 
 ### Goals
 
@@ -342,6 +373,8 @@ scenarios and measured quota values remain Stage 4 work.
 - Configure secure storage for configuration and secrets.
 - Create a CI/CD path with automated checks and controlled deployment.
 - Limit costs and document how to remove or stop resources.
+- After deployment exists, measure the deployed topology before investigating a real
+  bottleneck and making one justified before/after improvement.
 
 ### Learning Objectives
 
@@ -353,7 +386,14 @@ scenarios and measured quota values remain Stage 4 work.
 
 ### Expected Result
 
-The system can be deployed reproducibly to AWS, a demonstration scenario can be performed, and a verified change can be delivered through an automated process. The architecture, operational commands, approximate cost, and safe resource-removal procedure are documented.
+The system can be deployed reproducibly to AWS, a demonstration scenario can be
+performed, and a verified change can be delivered through an automated process. The
+architecture, operational commands, approximate cost, and safe resource-removal
+procedure are documented. This stage starts by designing and implementing the minimal
+deployment architecture from the already working application; it does not assume a
+specific AWS service, network topology, or release strategy. Its deployed-environment
+performance phase preserves the deferred sequence: deployed load measurement,
+bottleneck investigation, one justified improvement, and before/after comparison.
 
 ### Do Not Decide in Advance
 
