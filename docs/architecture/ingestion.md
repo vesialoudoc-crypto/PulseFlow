@@ -241,6 +241,35 @@ otherwise body-less error statuses. First-party ASP.NET Core OpenAPI generation
 documents the route, streaming NDJSON request body, and 202, 415, and 500 responses.
 Swagger UI points to the generated document in Development only.
 
+## Test composition
+
+Production composition is environment-agnostic. `Program` always registers the
+PostgreSQL, RabbitMQ, and Redis production integrations, including their startup
+initializers, readiness participants, health checks, and parser consumer. The only
+normal environment behavior is Development-only OpenAPI and Swagger UI exposure; an
+environment name does not select real or test infrastructure.
+
+`AddPulseFlowHttpApplication` and `UsePulseFlowHttpApplication` define the small shared
+HTTP composition boundary: controllers, exception handling, Problem Details,
+status-code handling, OpenAPI, HTTPS redirection, and health endpoint mapping. The
+production `Program` uses those methods.
+
+Component/API tests use the test-project-local `PulseFlowComponentTestHost`, which
+applies that same HTTP composition to an in-memory `TestServer` without starting
+`Program` or automatically registering infrastructure. Event-acceptance tests register
+a test publisher and a fixed rate limiter; liveness uses only the HTTP and health
+composition; startup/readiness tests register only test-local startup initializers and
+runtime health checks. The Redis quota HTTP test starts only Redis and explicitly
+registers a real Redis-backed limiter for each host. Each host owns a separate
+multiplexer to reflect separate API-process lifetimes while sharing the same Redis
+container state.
+
+`RabbitMqAsynchronousIngestionTests` remains a full-system test. Its dedicated
+`PulseFlowSystemWebApplicationFactory` starts the real `Program` with PostgreSQL,
+RabbitMQ, and Redis Testcontainers, a migrated database, and an isolated RabbitMQ
+queue. It verifies the production startup/readiness path rather than substituting any
+infrastructure component. This boundary is recorded in
+[ADR 0018](../decisions/0018-keep-production-composition-environment-agnostic.md).
 ## Parser consumer and terminal failure handling
 
 The implemented asynchronous path is:
@@ -335,13 +364,14 @@ subscribe to the same configured queue, and RabbitMQ is responsible for distribu
 deliveries between these competing consumers. This is structural capacity configuration
 only; it does not establish throughput, fairness, or load-performance results.
 
-The complete path is verified in an integration test using real RabbitMQ and PostgreSQL
-Testcontainers. The test starts both containers, starts the real application with a
-generated isolated queue name, posts `application/x-ndjson` to `POST /api/events`,
-asserts HTTP 202, and polls PostgreSQL with a bounded 15-second timeout until the
-expected rows appear. A focused real-broker test also verifies that `ConsumerCount = 2`
-registers two consumers on the configured queue by polling RabbitMQ queue metadata.
-These tests do not claim an ordering, distribution, or performance characteristic.
+The complete path is verified in a full-system test using PostgreSQL, RabbitMQ, and
+Redis Testcontainers. The test migrates PostgreSQL before it starts the real
+application with a generated isolated queue name, waits for production readiness, posts
+`application/x-ndjson` to `POST /api/events`, asserts HTTP 202, and polls PostgreSQL
+with a bounded 15-second timeout until the expected rows appear. A focused real-broker
+test also verifies that `ConsumerCount = 2` registers two consumers on the configured
+queue by polling RabbitMQ queue metadata. These tests do not claim an ordering,
+distribution, or performance characteristic.
 
 ## Distributed ingestion rate limiting
 

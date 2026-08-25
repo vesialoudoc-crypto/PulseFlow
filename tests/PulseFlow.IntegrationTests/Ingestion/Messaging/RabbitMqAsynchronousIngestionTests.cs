@@ -3,11 +3,9 @@ using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
-using Microsoft.Extensions.DependencyInjection.Extensions;
 using Microsoft.Extensions.Options;
 using PulseFlow.Api.Ingestion.Messaging;
 using PulseFlow.Api.Ingestion.Persistence;
-using PulseFlow.Api.Ingestion.RateLimiting;
 using PulseFlow.Api.Persistence;
 using PulseFlow.Api.Persistence.Events;
 using PulseFlow.Api.Startup;
@@ -117,25 +115,18 @@ public sealed class RabbitMqAsynchronousIngestionTests :
 
     #region Test helpers
 
-    private PulseFlowWebApplicationFactory<Program> CreateFactory(
+    private PulseFlowSystemWebApplicationFactory CreateFactory(
         int consumerCount,
         string queueName,
         Action<IServiceCollection>? configureTestServices = null)
     {
-        void ConfigureServices(IServiceCollection services)
-        {
-            services.RemoveAll<IIngestionRateLimiter>();
-            services.AddSingleton<IIngestionRateLimiter, AlwaysAllowedIngestionRateLimiter>();
-            configureTestServices?.Invoke(services);
-        }
-
-        return new PulseFlowWebApplicationFactory<Program>(
+        return new PulseFlowSystemWebApplicationFactory(
             _postgreSqlFixture.ConnectionString,
             _rabbitMqFixture.ConnectionString,
+            _redisFixture.ConnectionString,
             queueName,
             consumerCount,
-            ConfigureServices,
-            _redisFixture.ConnectionString);
+            configureTestServices);
     }
 
     private static ByteArrayContent CreateNdjsonContent(IEnumerable<string> types)
@@ -165,7 +156,7 @@ public sealed class RabbitMqAsynchronousIngestionTests :
         await dbContext.Database.MigrateAsync();
     }
 
-    private static async Task WaitUntilReadyAsync(PulseFlowWebApplicationFactory<Program> factory)
+    private static async Task WaitUntilReadyAsync(PulseFlowSystemWebApplicationFactory factory)
     {
         using var cancellationSource = new CancellationTokenSource(TimeSpan.FromSeconds(15));
         var readinessState = factory.Services.GetRequiredService<StartupReadinessState>();
@@ -307,15 +298,6 @@ public sealed class RabbitMqAsynchronousIngestionTests :
             }
 
             return new EfCoreEventChunkStore(_dbContext).StoreAsync(events, cancellationToken);
-        }
-    }
-
-    private sealed class AlwaysAllowedIngestionRateLimiter : IIngestionRateLimiter
-    {
-        public Task<IngestionRateLimitResult> TryAllowAsync(CancellationToken ct)
-        {
-            return Task.FromResult(
-                new IngestionRateLimitResult(IngestionRateLimitStatus.Allowed));
         }
     }
 

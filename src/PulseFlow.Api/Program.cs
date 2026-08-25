@@ -1,6 +1,4 @@
 using Microsoft.Extensions.Options;
-using Microsoft.OpenApi;
-using PulseFlow.Api.Health;
 using PulseFlow.Api.Http;
 using PulseFlow.Api.Ingestion;
 using PulseFlow.Api.Ingestion.Messaging;
@@ -20,13 +18,7 @@ if (connectionString is null)
     throw new InvalidOperationException("Connection string 'PulseFlow' is required.");
 }
 
-builder.Services.AddControllers();
-
-builder.Services.AddStartupInitialization();
-builder.Services.AddPulseFlowHealthChecks();
-
-builder.Services.AddProblemDetails();
-builder.Services.AddExceptionHandler<GlobalExceptionHandler>();
+builder.Services.AddPulseFlowHttpApplication();
 
 builder
     .Services.AddOptions<IngestionOptions>()
@@ -34,14 +26,14 @@ builder
     .ValidateDataAnnotations()
     .ValidateOnStart();
 
-builder.Services.AddPulseFlowPersistence(connectionString, builder.Environment);
+builder.Services.AddPulseFlowPersistence(connectionString);
 
 builder.Services.AddSingleton<NdjsonRecordReader>();
 builder.Services.AddSingleton<EventEnvelopeValidator>();
 
 builder.Services.AddScoped<IEventChunkStore, EfCoreEventChunkStore>();
-builder.Services.AddIngestionMessaging(builder.Configuration, builder.Environment);
-builder.Services.AddIngestionRateLimiting(builder.Configuration, builder.Environment);
+builder.Services.AddIngestionMessaging(builder.Configuration);
+builder.Services.AddIngestionRateLimiting(builder.Configuration);
 
 builder.Services.AddScoped<IngestEventsHandler>(services =>
 {
@@ -54,57 +46,8 @@ builder.Services.AddScoped<IngestEventsHandler>(services =>
     );
 });
 
-builder.Services.AddOpenApi(options =>
-{
-    options.AddOperationTransformer(
-        (operation, context, _) =>
-        {
-            if (
-                string.Equals(context.Description.HttpMethod, HttpMethods.Post, StringComparison.OrdinalIgnoreCase)
-                && string.Equals(context.Description.RelativePath, "api/events", StringComparison.OrdinalIgnoreCase)
-            )
-            {
-                operation.RequestBody = new OpenApiRequestBody
-                {
-                    Required = false,
-                    Content = new Dictionary<string, OpenApiMediaType>
-                    {
-                        ["application/x-ndjson"] = new()
-                        {
-                            Schema = new OpenApiSchema
-                            {
-                                Type = JsonSchemaType.String,
-                                Description = "Raw NDJSON batch accepted for asynchronous processing.",
-                            },
-                        },
-                    },
-                };
-            }
-
-            return Task.CompletedTask;
-        }
-    );
-});
-
 var app = builder.Build();
 
-app.UseExceptionHandler();
-app.UseStatusCodePages();
-
-if (app.Environment.IsDevelopment())
-{
-    app.MapOpenApi();
-
-    app.UseSwaggerUI(options =>
-    {
-        options.SwaggerEndpoint("/openapi/v1.json", "PulseFlow v1");
-    });
-}
-
-app.UseHttpsRedirection();
-
-app.MapPulseFlowHealthChecks();
-
-app.MapControllers();
+app.UsePulseFlowHttpApplication();
 
 app.Run();

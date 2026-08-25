@@ -1,6 +1,5 @@
 using Microsoft.Extensions.Configuration;
 using Microsoft.Extensions.Diagnostics.HealthChecks;
-using Microsoft.Extensions.Hosting;
 using Microsoft.Extensions.Options;
 using PulseFlow.Api.Ingestion.Messaging.RabbitMq;
 using PulseFlow.Api.Startup;
@@ -11,8 +10,7 @@ public static class IngestionMessagingServiceCollectionExtensions
 {
     public static IServiceCollection AddIngestionMessaging(
         this IServiceCollection services,
-        IConfiguration configuration,
-        IHostEnvironment environment
+        IConfiguration configuration
     )
     {
         // Keep RabbitMQ configuration inside messaging setup, not in application code.
@@ -68,22 +66,15 @@ public static class IngestionMessagingServiceCollectionExtensions
             );
         });
 
-        if (!environment.IsEnvironment("Testing"))
-        {
-            services.AddSingleton<IStartupInitializer>(serviceProvider =>
-                serviceProvider.GetRequiredService<RabbitMqMessagingInitializer>()
-            );
-            services.AddSingleton<IStartupReadinessParticipant>(serviceProvider =>
-                serviceProvider.GetRequiredService<EventParserConsumer>()
-            );
-            services.AddHealthChecks().AddCheck<RabbitMqHealthCheck>("rabbitmq", tags: ["ready"]);
-        }
-
-        // HTTP tests replace the publisher and do not need a real broker or workers.
+        services.AddSingleton<IStartupInitializer>(serviceProvider =>
+            serviceProvider.GetRequiredService<RabbitMqMessagingInitializer>()
+        );
+        services.AddSingleton<IStartupReadinessParticipant>(serviceProvider =>
+            serviceProvider.GetRequiredService<EventParserConsumer>()
+        );
+        services.AddHealthChecks().AddCheck<RabbitMqHealthCheck>("rabbitmq", tags: ["ready"]);
         services.AddSingleton<IHostedService>(serviceProvider =>
-            environment.IsEnvironment("Testing")
-                ? new TestingMessagingHostedService()
-                : serviceProvider.GetRequiredService<EventParserConsumer>()
+            serviceProvider.GetRequiredService<EventParserConsumer>()
         );
 
         return services;

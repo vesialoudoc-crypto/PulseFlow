@@ -1,5 +1,4 @@
 using Microsoft.Extensions.Diagnostics.HealthChecks;
-using Microsoft.Extensions.Hosting;
 using PulseFlow.Api.Startup;
 using StackExchange.Redis;
 
@@ -9,8 +8,7 @@ public static class IngestionRateLimitingServiceCollectionExtensions
 {
     public static IServiceCollection AddIngestionRateLimiting(
         this IServiceCollection services,
-        IConfiguration configuration,
-        IHostEnvironment environment
+        IConfiguration configuration
     )
     {
         string? redisConnectionString = configuration.GetConnectionString("Redis");
@@ -40,14 +38,11 @@ public static class IngestionRateLimitingServiceCollectionExtensions
         services.AddSingleton<RedisConnectionState>();
         services.AddSingleton<IIngestionRateLimiter, RedisIngestionRateLimiter>();
 
-        if (!environment.IsEnvironment("Testing"))
-        {
-            services.AddSingleton<RedisStartupInitializer>();
-            services.AddSingleton<IStartupInitializer>(serviceProvider =>
-                serviceProvider.GetRequiredService<RedisStartupInitializer>()
-            );
-            services.AddHealthChecks().AddCheck<RedisHealthCheck>("redis", tags: ["ready"]);
-        }
+        services.AddSingleton<RedisStartupInitializer>();
+        services.AddSingleton<IStartupInitializer>(serviceProvider =>
+            serviceProvider.GetRequiredService<RedisStartupInitializer>()
+        );
+        services.AddHealthChecks().AddCheck<RedisHealthCheck>("redis", tags: ["ready"]);
 
         return services;
     }
