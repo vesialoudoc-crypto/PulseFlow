@@ -80,10 +80,11 @@ transit. `StackExchange.Redis` receives the TLS-enabled endpoint through the exi
 `ConnectionStrings__Redis` key; it remains operational rate-limit state rather than
 durable primary storage.
 
-Amazon MQ is a private RabbitMQ 4.2 `mq.m7g.medium` in `SINGLE_INSTANCE` mode. The
-API gets a normal `amqps://` URI through its existing `ConnectionStrings__RabbitMq`
-contract and connects on port 5671. It is an evaluation-class, non-HA broker; it does
-not introduce a RabbitMQ cluster, SQS, SNS, EventBridge, or a separate worker.
+Amazon MQ is a private RabbitMQ 4.2 `mq.m7g.medium` in `SINGLE_INSTANCE` mode with
+its 200 GB default EBS volume. The API gets a normal `amqps://` URI through its existing
+`ConnectionStrings__RabbitMq` contract and connects on port 5671. It is an
+evaluation-class, non-HA broker; it does not introduce a RabbitMQ cluster, SQS, SNS,
+EventBridge, or a separate worker.
 
 ## Secrets, roles, and state
 

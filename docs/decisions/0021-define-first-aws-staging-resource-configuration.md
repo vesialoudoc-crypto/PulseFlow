@@ -66,9 +66,9 @@ ingestion event exists in PostgreSQL using a temporary in-VPC verifier task.
 
 - A public task IP is a low-cost egress mechanism, not public API exposure. The
   ALB is the only permanent public application entry point.
-- Amazon MQ is the dominant fixed staging cost. The pre-plan candidate estimate is
-  about USD 187/month in Frankfurt before variable LCU, Valkey, log, network, and
-  other usage charges. A real plan and explicit owner approval are required before
+- Amazon MQ is the dominant fixed staging cost. The 2026-08-26 public-price recheck
+  estimates about USD 210/month in Frankfurt before variable LCU, Valkey, log, network,
+  and other usage charges. A real plan and explicit owner approval are required before
   any paid resource creation.
 - ElastiCache Serverless Valkey requires TLS. The existing StackExchange.Redis
   connection contract supports the resulting `ssl=true` connection string without

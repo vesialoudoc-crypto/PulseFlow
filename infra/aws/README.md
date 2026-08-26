@@ -65,7 +65,8 @@ increase the co-hosted RabbitMQ consumers and is outside this staging slice.
   paid minimum pre-scaling. Serverless Valkey always enables encryption in transit,
   so the API receives `ConnectionStrings__Redis=<endpoint>,ssl=true`.
 - Amazon MQ RabbitMQ: version 4.2, `mq.m7g.medium`, `SINGLE_INSTANCE`, not publicly
-  accessible, with its normal 5 GiB default EBS volume. It exposes private AMQPS on
+  accessible, with its 200 GB default EBS volume for this single-instance M7g broker.
+  It exposes private AMQPS on
   5671. The existing `RabbitMQ.Client` URI parsing receives an `amqps://` URI;
   no application code changes are required.
 
@@ -189,20 +190,23 @@ actual bill or an applied-environment record**.
 
 | Fixed-ish item | Calculation | Approx. USD/month |
 | --- | --- | ---: |
-| Amazon MQ | `mq.m7g.medium` single instance: `$0.1638 × 730`, plus 5 GiB default EBS at `$0.119/GiB-month` | 120.17 |
+| Amazon MQ | `mq.m7g.medium` single instance: `$0.1638 × 730`, plus 200 GB default EBS at `$0.119/GB-month` | 143.37 |
 | RDS PostgreSQL | `db.t4g.micro`: `$0.019 × 730`, plus 20 GiB gp3 at `$0.137/GiB-month` | 16.61 |
 | Valkey Serverless minimum storage | 0.1 GB minimum × `$0.101/GB-hour × 730` | 7.37 |
 | ECS Fargate API | 0.25 vCPU at `$0.04656/vCPU-hour` + 0.5 GB at `$0.00511/GB-hour`, × 730 | 10.36 |
 | ALB hourly charge | `$0.027 × 730` | 19.71 |
 | Public IPv4 | two ALB addresses plus one running Fargate task: `3 × $0.005 × 730` | 10.95 |
 | Secrets Manager | four persistent secrets × `$0.40` | 1.60 |
-| **Fixed-ish baseline** | Excludes variable use below | **about 186.77** |
+| **Fixed-ish baseline** | Excludes variable use below | **about 209.98** |
 
 Usage-dependent charges are not included: ALB LCU-hours (`$0.008` each), Valkey
-ECPUs (`$0.0027` per million), CloudWatch Logs ingestion/storage, Secrets Manager API
-calls, image pull/network/data-transfer effects, temporary migration/verifier task
-runtime, backup/snapshot use beyond included RDS backup storage, and any future
-resource or price change. The Amazon MQ broker is the dominant always-on cost.
+ECPUs (`$0.0027` per million), Amazon MQ VPC-resource consumer data (`$0.01/GB`),
+CloudWatch Logs custom ingestion (`$0.63/GB`) and retained storage (`$0.0324/GB-month`),
+Secrets Manager API calls (`$0.05` per 10,000), internet/data-transfer effects, temporary
+migration/verifier task runtime, backup/snapshot use beyond included RDS backup storage,
+and any future resource or price change. AWS's account-level data-transfer-out free tier
+and tiered rates must be applied to the account's actual usage. The Amazon MQ broker is
+the dominant always-on cost.
 
 Before the first `terraform apply`, present the saved plan's exact resources and this
 updated cost checkpoint to the owner, then obtain one explicit approval for these paid
