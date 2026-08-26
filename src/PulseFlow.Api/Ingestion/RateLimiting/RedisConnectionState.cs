@@ -11,6 +11,16 @@ public sealed class RedisConnectionState
     public void SetConnectionMultiplexer(IConnectionMultiplexer connectionMultiplexer)
     {
         ArgumentNullException.ThrowIfNull(connectionMultiplexer);
-        Interlocked.CompareExchange(ref _connectionMultiplexer, connectionMultiplexer, null);
+
+        if (Interlocked.CompareExchange(ref _connectionMultiplexer, connectionMultiplexer, null) is not null)
+        {
+            throw new InvalidOperationException("Redis connection has already been established.");
+        }
+    }
+
+    public IConnectionMultiplexer GetRequiredConnectionMultiplexer()
+    {
+        return ConnectionMultiplexer
+            ?? throw new InvalidOperationException("Redis startup initialization has not established a connection.");
     }
 }

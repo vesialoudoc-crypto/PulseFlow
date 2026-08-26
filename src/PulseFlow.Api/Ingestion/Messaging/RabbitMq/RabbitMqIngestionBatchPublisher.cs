@@ -93,7 +93,7 @@ internal sealed class RabbitMqIngestionBatchPublisher : IIngestionBatchPublisher
             {
                 foreach (var channel in channels)
                 {
-                    await channel.DisposeAsync();
+                    DisposeChannelBestEffort(channel);
                 }
 
                 throw;
@@ -123,7 +123,7 @@ internal sealed class RabbitMqIngestionBatchPublisher : IIngestionBatchPublisher
             {
                 if (!publisherChannels.Writer.TryWrite(slot))
                 {
-                    await DisposeSlotChannelAsync(slot);
+                    DisposeSlotChannel(slot);
                 }
             }
         }
@@ -149,7 +149,7 @@ internal sealed class RabbitMqIngestionBatchPublisher : IIngestionBatchPublisher
 
                 while (_publisherChannels.Reader.TryRead(out var slot))
                 {
-                    await DisposeSlotChannelAsync(slot);
+                    DisposeSlotChannel(slot);
                 }
 
                 _publisherChannels = null;
@@ -203,7 +203,7 @@ internal sealed class RabbitMqIngestionBatchPublisher : IIngestionBatchPublisher
             // A failed replacement leaves the fixed slot available for a later request to recover.
             if (!slotLeased && slot is not null && !publisherChannels.Writer.TryWrite(slot))
             {
-                await DisposeSlotChannelAsync(slot);
+                DisposeSlotChannel(slot);
             }
         }
     }
@@ -235,12 +235,12 @@ internal sealed class RabbitMqIngestionBatchPublisher : IIngestionBatchPublisher
         }
         catch (OperationCanceledException) when (ct.IsCancellationRequested)
         {
-            await DisposeSlotChannelAsync(slot);
+            DisposeSlotChannel(slot);
             throw new OperationCanceledException(ct);
         }
         catch (OperationCanceledException) when (timeoutSource.IsCancellationRequested)
         {
-            await DisposeSlotChannelAsync(slot);
+            DisposeSlotChannel(slot);
             _logger.LogWarning(
                 "RabbitMQ publish/confirmation timed out after {ConfiguredTimeout}.",
                 _options.PublishConfirmationTimeout
@@ -249,7 +249,7 @@ internal sealed class RabbitMqIngestionBatchPublisher : IIngestionBatchPublisher
         }
         catch
         {
-            await DisposeSlotChannelAsync(slot);
+            DisposeSlotChannel(slot);
             throw;
         }
     }
@@ -262,7 +262,7 @@ internal sealed class RabbitMqIngestionBatchPublisher : IIngestionBatchPublisher
         );
     }
 
-    private async Task DisposeSlotChannelAsync(PublisherChannelSlot slot)
+    private void DisposeSlotChannel(PublisherChannelSlot slot)
     {
         if (slot.Channel is not { } channel)
         {
@@ -271,7 +271,58 @@ internal sealed class RabbitMqIngestionBatchPublisher : IIngestionBatchPublisher
 
         slot.Channel = null;
         Interlocked.Decrement(ref _usableChannelCount);
-        await channel.DisposeAsync();
+        DisposeChannelBestEffort(channel);
+    }
+
+    private void DisposeChannelBestEffort(IChannel channel)
+    {
+        _ = DisposeChannelBestEffortAsync(channel);
+    }
+
+    private async Task DisposeChannelBestEffortAsync(IChannel channel)
+    {
+        Task disposeTask;
+
+        try
+        {
+            disposeTask = channel.DisposeAsync().AsTask();
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(exception, "RabbitMQ publisher channel cleanup could not be started.");
+            return;
+        }
+
+        using var timeoutSource = new CancellationTokenSource(_options.CleanupTimeout);
+
+        try
+        {
+            await disposeTask.WaitAsync(timeoutSource.Token);
+        }
+        catch (OperationCanceledException) when (timeoutSource.IsCancellationRequested)
+        {
+            _logger.LogWarning(
+                "RabbitMQ publisher channel cleanup exceeded its best-effort timeout of {ConfiguredTimeout}.",
+                _options.CleanupTimeout
+            );
+            await ObserveLateCleanupAsync(disposeTask);
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(exception, "RabbitMQ publisher channel cleanup failed.");
+        }
+    }
+
+    private async Task ObserveLateCleanupAsync(Task disposeTask)
+    {
+        try
+        {
+            await disposeTask;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(exception, "RabbitMQ publisher channel cleanup failed after its best-effort timeout.");
+        }
     }
 
     private sealed class PublisherChannelSlot

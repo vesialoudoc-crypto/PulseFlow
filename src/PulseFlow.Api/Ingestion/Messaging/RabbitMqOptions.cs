@@ -38,4 +38,6 @@ public sealed class RabbitMqOptions
     public TimeSpan PublisherChannelTimeout { get; init; } = TimeSpan.FromSeconds(5);
 
     public TimeSpan PublishConfirmationTimeout { get; init; } = TimeSpan.FromSeconds(5);
+
+    public TimeSpan CleanupTimeout { get; init; } = TimeSpan.FromSeconds(1);
 }

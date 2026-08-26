@@ -49,8 +49,11 @@ public static class IngestionRateLimitingServiceCollectionExtensions
         redisOptions.ConnectTimeout = timeoutOptions.ConnectTimeoutMilliseconds;
         redisOptions.AsyncTimeout = timeoutOptions.AsyncTimeoutMilliseconds;
 
-        services.AddSingleton<IConnectionMultiplexer>(_ => ConnectionMultiplexer.Connect(redisOptions));
         services.AddSingleton<RedisConnectionState>();
+        services.AddSingleton(new RedisConnectionMultiplexerFactory(redisOptions));
+        services.AddSingleton<IConnectionMultiplexer>(serviceProvider =>
+            serviceProvider.GetRequiredService<RedisConnectionState>().GetRequiredConnectionMultiplexer()
+        );
         services.AddSingleton<IIngestionRateLimiter, RedisIngestionRateLimiter>();
 
         services.AddSingleton<RedisStartupInitializer>();

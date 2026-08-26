@@ -39,7 +39,9 @@ public static class IngestionMessagingServiceCollectionExtensions
                     && options.PublisherChannelTimeout > TimeSpan.Zero
                     && options.PublisherChannelTimeout <= RabbitMqOptions.MaximumTimeout
                     && options.PublishConfirmationTimeout > TimeSpan.Zero
-                    && options.PublishConfirmationTimeout <= RabbitMqOptions.MaximumTimeout,
+                    && options.PublishConfirmationTimeout <= RabbitMqOptions.MaximumTimeout
+                    && options.CleanupTimeout > TimeSpan.Zero
+                    && options.CleanupTimeout <= RabbitMqOptions.MaximumTimeout,
                 $"Every RabbitMq timeout must be greater than zero and no more than {int.MaxValue} milliseconds."
             )
             .ValidateOnStart();

@@ -94,6 +94,45 @@ public sealed class RabbitMqIngestionBatchPublisherTests
     }
 
     [Fact]
+    public async Task PublishAsync_PublishTimeoutWithBlockingCleanup_ThrowsWithoutWaitingForCleanup()
+    {
+        // Arrange
+        var channelFactory = new ScriptedPublisherChannelFactory();
+        channelFactory.EnqueueChannel(PublishOutcome.BlockUntilCanceled, DisposalOutcome.Block);
+        await using var publisher = CreatePublisher(channelFactory);
+        await publisher.InitializeAsync(CancellationToken.None);
+
+        // Act
+        var exception = await Assert.ThrowsAsync<TimeoutException>(() =>
+            publisher.PublishAsync("timed-out-batch"u8.ToArray(), CancellationToken.None)).WaitAsync(TimeSpan.FromSeconds(1));
+
+        // Assert
+        Assert.Equal("RabbitMQ publish/confirmation timed out.", exception.Message);
+        Assert.True(channelFactory.CreatedChannels.Single().DisposalStarted);
+        channelFactory.CreatedChannels.Single().CompleteDisposal();
+    }
+
+    [Fact]
+    public async Task PublishAsync_CallerCancellationWithBlockingCleanup_ReturnsCancellationWithoutWaitingForCleanup()
+    {
+        // Arrange
+        var channelFactory = new ScriptedPublisherChannelFactory();
+        channelFactory.EnqueueChannel(PublishOutcome.BlockUntilCanceled, DisposalOutcome.Block);
+        await using var publisher = CreatePublisher(channelFactory);
+        await publisher.InitializeAsync(CancellationToken.None);
+        using var cancellationSource = new CancellationTokenSource(TimeSpan.FromMilliseconds(25));
+
+        // Act
+        var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
+            publisher.PublishAsync("cancelled-batch"u8.ToArray(), cancellationSource.Token)).WaitAsync(TimeSpan.FromSeconds(1));
+
+        // Assert
+        Assert.Equal(cancellationSource.Token, exception.CancellationToken);
+        Assert.True(channelFactory.CreatedChannels.Single().DisposalStarted);
+        channelFactory.CreatedChannels.Single().CompleteDisposal();
+    }
+
+    [Fact]
     public async Task PublishAsync_UncertainPublish_DoesNotReuseChannelOrRetryBatch()
     {
         // Arrange
@@ -352,6 +391,12 @@ public sealed class RabbitMqIngestionBatchPublisherTests
         BlockUntilCanceled,
     }
 
+    private enum DisposalOutcome
+    {
+        Complete,
+        Block,
+    }
+
     private sealed class ScriptedPublisherChannelFactory
     {
         private readonly Queue<Func<ValueTask<IChannel>>> _channelCreations = new();
@@ -360,13 +405,13 @@ public sealed class RabbitMqIngestionBatchPublisherTests
 
         public int CreateFailureCount { get; private set; }
 
-        public void EnqueueChannel(PublishOutcome outcome)
+        public void EnqueueChannel(PublishOutcome outcome, DisposalOutcome disposalOutcome = DisposalOutcome.Complete)
         {
             _channelCreations.Enqueue(() =>
             {
                 var channel = DispatchProxy.Create<IChannel, ScriptedPublisherChannel>();
                 var channelProxy = (ScriptedPublisherChannel)(object)channel;
-                channelProxy.Initialize(outcome);
+                channelProxy.Initialize(outcome, disposalOutcome);
                 CreatedChannels.Add(channelProxy);
                 return ValueTask.FromResult(channel);
             });
@@ -392,14 +437,24 @@ public sealed class RabbitMqIngestionBatchPublisherTests
     private class ScriptedPublisherChannel : DispatchProxy
     {
         private PublishOutcome _outcome;
+        private DisposalOutcome _disposalOutcome;
+        private readonly TaskCompletionSource _disposeCompletion = new(TaskCreationOptions.RunContinuationsAsynchronously);
 
         public bool Disposed { get; private set; }
 
+        public bool DisposalStarted { get; private set; }
+
+        public void CompleteDisposal()
+        {
+            _disposeCompletion.TrySetResult();
+        }
+
         public int PublishCount { get; private set; }
 
-        public void Initialize(PublishOutcome outcome)
+        public void Initialize(PublishOutcome outcome, DisposalOutcome disposalOutcome)
         {
             _outcome = outcome;
+            _disposalOutcome = disposalOutcome;
         }
 
         protected override object? Invoke(MethodInfo? targetMethod, object?[]? arguments)
@@ -427,7 +482,14 @@ public sealed class RabbitMqIngestionBatchPublisherTests
         private ValueTask Dispose()
         {
             Disposed = true;
-            return ValueTask.CompletedTask;
+            DisposalStarted = true;
+
+            return _disposalOutcome switch
+            {
+                DisposalOutcome.Complete => ValueTask.CompletedTask,
+                DisposalOutcome.Block => new ValueTask(_disposeCompletion.Task),
+                _ => throw new InvalidOperationException("Unsupported disposal outcome."),
+            };
         }
     }
 

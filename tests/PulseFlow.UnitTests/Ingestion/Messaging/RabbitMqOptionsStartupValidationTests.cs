@@ -14,6 +14,7 @@ public sealed class RabbitMqOptionsStartupValidationTests
     {
         yield return ["TopologyDeclarationTimeout", "00:00:00"];
         yield return ["PublisherChannelTimeout", "-00:00:01"];
+        yield return ["CleanupTimeout", "00:00:00"];
     }
 
     [Theory]
@@ -60,6 +61,7 @@ public sealed class RabbitMqOptionsStartupValidationTests
         Assert.Equal(TimeSpan.FromSeconds(3), options.TopologyDeclarationTimeout);
         Assert.Equal(TimeSpan.FromSeconds(4), options.PublisherChannelTimeout);
         Assert.Equal(TimeSpan.FromSeconds(5), options.PublishConfirmationTimeout);
+        Assert.Equal(TimeSpan.FromSeconds(1), options.CleanupTimeout);
     }
 
     [Fact]
@@ -95,6 +97,7 @@ public sealed class RabbitMqOptionsStartupValidationTests
             ["RabbitMq:TopologyDeclarationTimeout"] = "00:00:03",
             ["RabbitMq:PublisherChannelTimeout"] = "00:00:04",
             ["RabbitMq:PublishConfirmationTimeout"] = "00:00:05",
+            ["RabbitMq:CleanupTimeout"] = "00:00:01",
         };
 
         if (overrides is not null)

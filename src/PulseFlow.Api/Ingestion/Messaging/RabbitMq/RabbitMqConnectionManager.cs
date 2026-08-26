@@ -77,7 +77,7 @@ internal sealed class RabbitMqConnectionManager : IAsyncDisposable
         }
         catch
         {
-            await CleanupFailedInitializationAsync();
+            CleanupFailedInitialization();
             throw;
         }
         finally
@@ -193,14 +193,62 @@ internal sealed class RabbitMqConnectionManager : IAsyncDisposable
         );
     }
 
-    private async Task CleanupFailedInitializationAsync()
+    private void CleanupFailedInitialization()
     {
-        if (_connection is null)
+        var connection = _connection;
+        _connection = null;
+
+        if (connection is null)
         {
             return;
         }
 
-        await _connection.DisposeAsync();
-        _connection = null;
+        _ = DisposeConnectionBestEffortAsync(connection);
+    }
+
+    private async Task DisposeConnectionBestEffortAsync(IConnection connection)
+    {
+        Task disposeTask;
+
+        try
+        {
+            disposeTask = connection.DisposeAsync().AsTask();
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(exception, "RabbitMQ connection cleanup could not be started.");
+            return;
+        }
+
+        using var timeoutSource = new CancellationTokenSource(_options.CleanupTimeout);
+
+        try
+        {
+            await disposeTask.WaitAsync(timeoutSource.Token);
+        }
+        catch (OperationCanceledException) when (timeoutSource.IsCancellationRequested)
+        {
+            _logger.LogWarning(
+                "RabbitMQ connection cleanup exceeded its best-effort timeout of {ConfiguredTimeout}.",
+                _options.CleanupTimeout
+            );
+            await ObserveLateCleanupAsync(disposeTask);
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(exception, "RabbitMQ connection cleanup failed.");
+        }
+    }
+
+    private async Task ObserveLateCleanupAsync(Task disposeTask)
+    {
+        try
+        {
+            await disposeTask;
+        }
+        catch (Exception exception)
+        {
+            _logger.LogWarning(exception, "RabbitMQ connection cleanup failed after its best-effort timeout.");
+        }
     }
 }

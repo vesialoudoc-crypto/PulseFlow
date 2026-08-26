@@ -44,13 +44,21 @@ cancellation, or publish failure) disposes its channel and returns the empty slo
 the pool. A later request may create a replacement within `PublisherChannelTimeout`;
 that replacement serves only the later request and never retries the batch with the
 uncertain outcome. If no usable channel remains, RabbitMQ readiness is unhealthy even
-when the broker connection itself is open.
+when the broker connection itself is open. The slot is detached before cleanup begins.
+Channel and failed-startup connection cleanup run in the background under the separate
+one-second `CleanupTimeout` best-effort budget, so an `IChannel.DisposeAsync()` or
+`IConnection.DisposeAsync()` abort cannot delay or replace the original timeout or
+caller cancellation. A cleanup that exceeds its logical budget continues only for
+observation and is logged if it later fails.
 
 Redis configures `ConnectTimeout` and `AsyncTimeout`. StackExchange.Redis 3.1.13
 uses `AsyncTimeout` to fault an overdue asynchronous command with
 `RedisTimeoutException`, so the rate-limit script and startup `PING` use `WaitAsync`
 only with the caller token. That local cancellation wait does not physically cancel an
-already-sent Redis command.
+already-sent Redis command. Startup creates the shared multiplexer with `ConnectAsync`
+inside `RedisStartupInitializer`, rather than from a synchronous DI factory. The
+overall startup token bounds the logical wait; if it expires first, a connection that
+finishes later is disposed without delaying the startup failure.
 
 `StartupInitializationService` creates one linked cancellation token for its complete
 initialization sequence. Health-check registrations use ASP.NET Core's built-in timeout
@@ -66,6 +74,7 @@ The configured initial budgets are:
 | PostgreSQL connection and command | 10 seconds |
 | RabbitMQ connection, handshake, continuation, and topology | 10 seconds |
 | RabbitMQ publisher channel and publish/confirmation | 5 seconds |
+| RabbitMQ failed-resource cleanup | 1 second best effort |
 | Redis connect | 10 seconds |
 | Redis async operation | 1 second |
 | Readiness registration | 2 seconds |
@@ -87,6 +96,9 @@ dependency checks they invoke use the readiness budget.
 - A timed-out, cancelled, or failed RabbitMQ publisher channel is discarded rather
   than reused. Its fixed pool slot remains available for a bounded, later replacement,
   preserving capacity without automatically retrying the original batch.
+- Cleanup does not extend the caller-visible publish or startup deadline. It remains
+  best effort because the RabbitMQ client disposal APIs cannot be cancelled once
+  started.
 - The budgets are initial operational values, not measured latency targets. They can
   be adjusted through configuration after observation without changing public HTTP
   contracts.
