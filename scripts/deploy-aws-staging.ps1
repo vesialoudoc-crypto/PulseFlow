@@ -21,6 +21,7 @@ if ($DeleteBootstrapSecret -and -not $Destroy) {
 
 . (Join-Path $PSScriptRoot "Import-PulseFlowDotEnv.ps1")
 . (Join-Path $PSScriptRoot "Resolve-PulseFlowExecutable.ps1")
+. (Join-Path $PSScriptRoot "Resolve-PulseFlowRdsConnectionMetadata.ps1")
 
 $script:ghcrBootstrapSecretName = "pulseflow-staging/bootstrap/ghcr"
 $script:requiredSavedPlanTerraformVersion = "1.15.8"
@@ -571,6 +572,60 @@ function Invoke-OneShotTask {
     return $taskArn
 }
 
+function Get-RdsMasterCredentials {
+    param(
+        [Parameter(Mandatory)]
+        [string]$MasterSecretArn
+    )
+
+    $masterSecretJson = Invoke-Aws -Arguments @(
+        "secretsmanager",
+        "get-secret-value",
+        "--secret-id",
+        $MasterSecretArn,
+        "--query",
+        "SecretString",
+        "--output",
+        "text"
+    )
+
+    try {
+        $masterSecret = $masterSecretJson | ConvertFrom-Json
+    }
+    catch {
+        throw "The RDS-managed master credential secret contains invalid JSON."
+    }
+
+    return [pscustomobject]@{
+        Username = Get-PulseFlowRequiredStringProperty `
+            -InputObject $masterSecret `
+            -PropertyName "username" `
+            -Description "RDS-managed master credential secret username"
+        Password = Get-PulseFlowRequiredStringProperty `
+            -InputObject $masterSecret `
+            -PropertyName "password" `
+            -Description "RDS-managed master credential secret password"
+    }
+}
+
+function Get-RdsConnectionMetadata {
+    param(
+        [Parameter(Mandatory)]
+        [string]$MasterSecretArn
+    )
+
+    $describeDbInstancesJson = Invoke-Aws -Arguments @(
+        "rds",
+        "describe-db-instances",
+        "--output",
+        "json"
+    )
+
+    return Resolve-PulseFlowRdsConnectionMetadata `
+        -MasterSecretArn $MasterSecretArn `
+        -DescribeDbInstancesJson $describeDbInstancesJson
+}
+
 $repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
 $dotenvPath = Join-Path $repositoryRoot ".env"
 Import-PulseFlowDotEnv -Path $dotenvPath
@@ -691,18 +746,10 @@ try {
         throw "Amazon MQ broker state is $rabbitMqBrokerState, expected RUNNING. The API service was not updated."
     }
 
-    $rdsMasterSecret = Invoke-Aws -Arguments @(
-        "secretsmanager",
-        "get-secret-value",
-        "--secret-id",
-        $rdsMasterSecretArn,
-        "--query",
-        "SecretString",
-        "--output",
-        "text"
-    ) | ConvertFrom-Json
+    $rdsMasterCredentials = Get-RdsMasterCredentials -MasterSecretArn $rdsMasterSecretArn
+    $rdsConnectionMetadata = Get-RdsConnectionMetadata -MasterSecretArn $rdsMasterSecretArn
 
-    $postgresConnectionString = "Host=$(ConvertTo-ConnectionStringValue $rdsMasterSecret.host);Port=$($rdsMasterSecret.port);Database=$(ConvertTo-ConnectionStringValue $rdsMasterSecret.dbname);Username=$(ConvertTo-ConnectionStringValue $rdsMasterSecret.username);Password=$(ConvertTo-ConnectionStringValue $rdsMasterSecret.password);Ssl Mode=Require;Trust Server Certificate=true"
+    $postgresConnectionString = "Host=$(ConvertTo-ConnectionStringValue $rdsConnectionMetadata.Host);Port=$($rdsConnectionMetadata.Port);Database=$(ConvertTo-ConnectionStringValue $rdsConnectionMetadata.Database);Username=$(ConvertTo-ConnectionStringValue $rdsMasterCredentials.Username);Password=$(ConvertTo-ConnectionStringValue $rdsMasterCredentials.Password);Ssl Mode=Require;Trust Server Certificate=true"
     Put-ConnectionSecret -SecretArn $databaseConnectionSecretArn -ConnectionString $postgresConnectionString
 
     $rabbitMqUri = [System.Uri]$rabbitMqEndpoint
