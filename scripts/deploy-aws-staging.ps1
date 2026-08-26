@@ -20,8 +20,10 @@ if ($DeleteBootstrapSecret -and -not $Destroy) {
 }
 
 . (Join-Path $PSScriptRoot "Import-PulseFlowDotEnv.ps1")
+. (Join-Path $PSScriptRoot "Resolve-PulseFlowExecutable.ps1")
 
 $script:ghcrBootstrapSecretName = "pulseflow-staging/bootstrap/ghcr"
+$script:requiredSavedPlanTerraformVersion = "1.15.8"
 
 function Get-RequiredEnvironmentVariable {
     param(
@@ -127,7 +129,7 @@ function Invoke-TerraformOutput {
     }
     $arguments += $Name
 
-    $value = & terraform @arguments
+    $value = & $script:terraformExecutable @arguments
     if ($LASTEXITCODE -ne 0) {
         throw "terraform output $Name failed."
     }
@@ -147,7 +149,7 @@ function Invoke-Aws {
     }
 
     $awsArguments += @("--region", $script:awsRegion)
-    $result = & aws @awsArguments @Arguments
+    $result = & $script:awsExecutable @awsArguments @Arguments
     if ($LASTEXITCODE -ne 0) {
         throw "AWS CLI command failed."
     }
@@ -169,7 +171,7 @@ function Set-GhcrRegistryCredentialSecret {
     }
     $awsArguments += @("--region", $script:awsRegion)
 
-    $describeResult = & aws @awsArguments @(
+    $describeResult = & $script:awsExecutable @awsArguments @(
         "secretsmanager",
         "describe-secret",
         "--secret-id",
@@ -241,7 +243,7 @@ function Get-GhcrRegistryCredentialSecretArn {
     }
     $awsArguments += @("--region", $script:awsRegion)
 
-    $describeResult = & aws @awsArguments @(
+    $describeResult = & $script:awsExecutable @awsArguments @(
         "secretsmanager",
         "describe-secret",
         "--secret-id",
@@ -296,7 +298,7 @@ function Confirm-AwsCallerIdentity {
 }
 
 function Initialize-TerraformConfiguration {
-    & terraform init -input=false
+    & $script:terraformExecutable init -input=false
     if ($LASTEXITCODE -ne 0) {
         throw "terraform init failed."
     }
@@ -324,14 +326,14 @@ function Invoke-AwsStagingPlan {
 
     Push-Location $TerraformDirectory
     try {
-        & terraform fmt -check -recursive
+        & $script:terraformExecutable fmt -check -recursive
         if ($LASTEXITCODE -ne 0) {
             throw "terraform fmt -check -recursive failed."
         }
 
         Initialize-TerraformConfiguration
 
-        & terraform validate
+        & $script:terraformExecutable validate
         if ($LASTEXITCODE -ne 0) {
             throw "terraform validate failed."
         }
@@ -352,7 +354,7 @@ function Invoke-AwsStagingPlan {
             $planArguments += @("-var", "aws_profile=$AwsProfile")
         }
 
-        & terraform @planArguments
+        & $script:terraformExecutable @planArguments
         if ($LASTEXITCODE -ne 0) {
             throw "terraform plan failed."
         }
@@ -381,7 +383,7 @@ function Invoke-AwsStagingApply {
     try {
         Initialize-TerraformConfiguration
 
-        & terraform apply -input=false "pulseflow-staging.tfplan"
+        & $script:terraformExecutable apply -input=false "pulseflow-staging.tfplan"
         if ($LASTEXITCODE -ne 0) {
             throw "Terraform could not apply the reviewed saved plan. Ensure infra/aws/pulseflow-staging.tfplan was created with the installed Terraform version and is still compatible. The script did not generate a replacement plan."
         }
@@ -425,12 +427,12 @@ function Invoke-AwsStagingDestroy {
             $destroyArguments += @("-var", "aws_profile=$AwsProfile")
         }
 
-        & terraform @destroyArguments
+        & $script:terraformExecutable @destroyArguments
         if ($LASTEXITCODE -ne 0) {
             throw "terraform destroy failed. Terraform-managed staging resources may remain; inspect Terraform output and state before retrying."
         }
 
-        $remainingResources = @(& terraform state list)
+        $remainingResources = @(& $script:terraformExecutable state list)
         if ($LASTEXITCODE -ne 0) {
             throw "terraform state list failed after destroy; unable to verify that no Terraform-managed resources remain."
         }
@@ -616,12 +618,19 @@ if ($PSCmdlet.ParameterSetName -in @("Plan", "Destroy")) {
     Get-GhcrImageRepository -Image $requiredEnvironmentVariables["PULSEFLOW_IMAGE"] | Out-Null
 }
 
-if (-not (Get-Command terraform -ErrorAction SilentlyContinue)) {
-    throw "Terraform must be available on PATH."
+$terraformResolution = Resolve-PulseFlowTerraformExecutable -PreferredVersion $script:requiredSavedPlanTerraformVersion
+$script:terraformExecutable = $terraformResolution.Path
+$script:terraformVersion = $terraformResolution.Version
+if ([string]::IsNullOrWhiteSpace($script:terraformVersion)) {
+    throw "Unable to determine the Terraform version from '$script:terraformExecutable'."
 }
 
-if (-not (Get-Command aws -ErrorAction SilentlyContinue)) {
-    throw "AWS CLI v2 must be available on PATH."
+$awsResolution = Resolve-PulseFlowAwsCliExecutable
+$script:awsExecutable = $awsResolution.Path
+$script:awsCliVersion = $awsResolution.Version
+
+if ($Apply -and $script:terraformVersion -ne $script:requiredSavedPlanTerraformVersion) {
+    throw "The saved plan requires Terraform $script:requiredSavedPlanTerraformVersion, but '$script:terraformExecutable' reports $script:terraformVersion. -Apply stopped before terraform apply. Install or expose Terraform $script:requiredSavedPlanTerraformVersion; do not regenerate the reviewed plan automatically."
 }
 
 if ($PSCmdlet.ParameterSetName -eq "Plan") {

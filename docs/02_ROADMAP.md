@@ -468,7 +468,10 @@ end-to-end smoke proof; `-Destroy` removes Terraform-managed resources and verif
 empty Terraform state. Normal destroy keeps the external, non-Terraform-managed GHCR
 bootstrap secret reusable; `-Destroy -DeleteBootstrapSecret` is the separate explicit
 complete-bootstrap-cleanup mode. AWS profiles remain optional rather than a required
-second local credential store.
+second local credential store. The script resolves installed Terraform and AWS CLI v2
+executables itself: it uses `PATH` first, then WinGet Terraform and standard Windows
+AWS CLI locations. The current reviewed saved plan requires Terraform 1.15.8, which
+`-Apply` verifies before it can invoke Terraform apply.
 
 Azure remains the later portability proof. Azure Container Apps, PostgreSQL Flexible
 Server, Azure Managed Redis, and a Container Apps migration job fit the application,

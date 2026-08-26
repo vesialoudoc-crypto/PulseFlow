@@ -145,6 +145,14 @@ From the repository root, install Terraform and AWS CLI v2, then run:
 pwsh ./scripts/deploy-aws-staging.ps1
 ```
 
+The script resolves the full installed executable paths itself. It checks `PATH` first,
+then searches the current user's WinGet Terraform package locations and standard AWS
+CLI v2 Windows installation locations, including
+`C:\Program Files\Amazon\AWSCLIV2\aws.exe`. Manual `PATH` editing is not part of the
+normal workflow, but neither tool is installed automatically. The current reviewed
+saved plan requires Terraform 1.15.8; `-Apply` stops before apply if the resolved
+Terraform version differs.
+
 The command uses the standard AWS environment-variable credential chain; no AWS CLI
 profile is required. An existing profile remains an optional override for operators
 who explicitly need one:
