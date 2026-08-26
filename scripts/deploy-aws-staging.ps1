@@ -22,6 +22,7 @@ if ($DeleteBootstrapSecret -and -not $Destroy) {
 . (Join-Path $PSScriptRoot "Import-PulseFlowDotEnv.ps1")
 . (Join-Path $PSScriptRoot "Resolve-PulseFlowExecutable.ps1")
 . (Join-Path $PSScriptRoot "Resolve-PulseFlowRdsConnectionMetadata.ps1")
+. (Join-Path $PSScriptRoot "Get-PulseFlowRemainingTerraformStateResources.ps1")
 
 $script:ghcrBootstrapSecretName = "pulseflow-staging/bootstrap/ghcr"
 $script:requiredSavedPlanTerraformVersion = "1.15.8"
@@ -433,12 +434,15 @@ function Invoke-AwsStagingDestroy {
             throw "terraform destroy failed. Terraform-managed staging resources may remain; inspect Terraform output and state before retrying."
         }
 
-        $remainingResources = @(& $script:terraformExecutable state list)
+        $stateListOutput = @(& $script:terraformExecutable state list)
         if ($LASTEXITCODE -ne 0) {
             throw "terraform state list failed after destroy; unable to verify that no Terraform-managed resources remain."
         }
 
-        if (($remainingResources | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -ne 0) {
+        $remainingResources = @(
+            Get-PulseFlowRemainingTerraformStateResources -StateListOutput $stateListOutput
+        )
+        if ($remainingResources.Count -ne 0) {
             throw "Terraform destroy completed, but Terraform state still reports managed resources. Inspect terraform state list before any further action."
         }
     }

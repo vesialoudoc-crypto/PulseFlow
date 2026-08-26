@@ -364,7 +364,7 @@ implement deployment, then investigate and optimize a measured deployed constrai
 
 ## Stage 5: Deployment to AWS
 
-**Status:** In progress (next active major stage)
+**Status:** In progress (first disposable AWS lifecycle proven; next: deployed observability and performance measurement)
 
 ### Goals
 
@@ -441,11 +441,10 @@ allowing public-IP Fargate tasks whose security group accepts HTTP only from the
 PostgreSQL, Valkey, and RabbitMQ remain private. This is a staging boundary, not a
 production-networking claim.
 
-The first AWS Terraform definition now exists in [`infra/aws/`](../infra/aws/). It is
+The first AWS Terraform definition exists in [`infra/aws/`](../infra/aws/). It is
 locally formatted and validated with Terraform 1.15.9, AWS provider 6.61.0, and Random
-provider 3.9.0. An account-specific plan has been saved, but Terraform has not been
-applied and no Terraform-managed AWS resource exists. The accepted first-plan
-configuration is Frankfurt (`eu-central-1`), a no-NAT VPC, ALB, one
+provider 3.9.0. Its accepted first-plan configuration is Frankfurt (`eu-central-1`),
+a no-NAT VPC, ALB, one
 0.25-vCPU/512-MiB Fargate API task after successful deployment, private Single-AZ
 `db.t4g.micro` RDS PostgreSQL 17, ElastiCache Serverless Valkey 8, and a private
 RabbitMQ 4.2 `mq.m7g.medium` Amazon MQ single instance. It keeps the GHCR SHA image
@@ -473,6 +472,28 @@ executables itself: it uses `PATH` first, then WinGet Terraform and standard Win
 AWS CLI locations. The current reviewed saved plan requires Terraform 1.15.8, which
 `-Apply` verifies before it can invoke Terraform apply.
 
+The first disposable AWS lifecycle has been proven end to end. Terraform apply
+reported 49 added, 0 changed, and 0 destroyed. The deployment script then completed
+the migration ECS task, public-ALB `/health/live` and `/health/ready` HTTP-200 checks,
+an ingestion smoke POST returning HTTP 202, in-VPC PostgreSQL verification of the
+exact event, and removal of that exact smoke row. Terraform destroy subsequently
+reported 49 destroyed. Its post-destroy verification then exposed a PowerShell
+empty-pipeline `.Count` defect; a manual non-mutating `terraform state list` returned
+empty, confirming the Terraform-managed staging environment had been removed. The
+external GHCR bootstrap secret remains intentionally reusable because normal
+`-Destroy` was used without `-DeleteBootstrapSecret`.
+
+The first deployment also established that the RDS-managed master secret contains
+credentials, not endpoint metadata. Deployment tooling now obtains endpoint, port,
+and database name from `rds describe-db-instances` and retains the credential secret
+only for username and password. This is a correction within the accepted architecture,
+not a change to its resource mapping or lifecycle sequence.
+
+The next active technical objective is deployed observability and performance
+measurement: run a short controlled AWS load test, identify one measured bottleneck,
+and make one justified before/after optimization. Do not resume local bottleneck
+tuning on the shared Docker Desktop topology.
+
 Azure remains the later portability proof. Azure Container Apps, PostgreSQL Flexible
 Server, Azure Managed Redis, and a Container Apps migration job fit the application,
 but Azure has no first-party managed RabbitMQ equivalent. Self-hosting RabbitMQ is a
@@ -484,10 +505,10 @@ See [Cloud Portability Audit](architecture/cloud-portability-audit.md) and
 
 The first AWS service mapping, staging networking boundary, selected first-plan
 region/sizes, local-state boundary, GHCR bootstrap boundary, and manual migration-first
-release mechanism are accepted in ADRs 0020 and 0021. A real account-specific plan,
-the resolved PostgreSQL patch, explicit paid-resource approval, apply, deployment
-evidence, automatic deployment, production networking/HA, restricted RabbitMQ user
-management, and the final production topology remain unresolved. API and
+release mechanism are accepted in ADRs 0020 and 0021. Automatic deployment/CI/CD,
+deployed observability and performance measurement, a measured bottleneck and
+justified before/after optimization, production networking/HA, restricted RabbitMQ
+user management, and the final production topology remain unresolved. API and
 RabbitMQ-consumer decoupling also remains deferred.
 
 ## Stage 6: Production Hardening
