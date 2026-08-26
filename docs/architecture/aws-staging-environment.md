@@ -1,6 +1,7 @@
 # AWS Staging Environment Architecture
 
-**Status:** Accepted Terraform configuration; not yet planned, applied, or deployed.
+**Status:** Accepted Terraform configuration; account-specific plan saved, not applied
+or deployed.
 
 This document describes the first AWS staging environment implemented in
 [`infra/aws/`](../../infra/aws/). It does not claim that an AWS account contains these
@@ -88,11 +89,14 @@ EventBridge, or a separate worker.
 
 ## Secrets, roles, and state
 
-An external AWS Secrets Manager secret contains the GHCR package-read credential. Its
-value is never supplied to Terraform. RDS owns the master-password secret; Terraform
-creates empty metadata for the application PostgreSQL and RabbitMQ connection-string
-secrets; the deployment script fills their values in memory immediately before the
-migration task.
+An external AWS Secrets Manager secret contains the GHCR package-read credential. The
+repository-root ignored `.env` supplies the local AWS environment variables,
+`GHCR_USERNAME`, `GHCR_TOKEN`, and immutable `PULSEFLOW_IMAGE` to the plan bootstrap
+script. It creates or updates the external GHCR secret without passing its token to
+Terraform, then Terraform receives only its ARN. RDS owns the master-password secret;
+Terraform creates empty metadata for the application PostgreSQL and RabbitMQ
+connection-string secrets; the post-apply deployment script fills their values in
+memory immediately before the migration task.
 
 The API/migration execution role has the managed execution policy and narrowly scoped
 `secretsmanager:GetSecretValue` access to the exact registry and runtime secrets. The
@@ -104,10 +108,12 @@ and held in state.
 
 ## Verification still required
 
-No AWS CLI, AWS profile, GHCR secret ARN, real plan, or apply was available when this
-configuration was written. Before creation, run the validation/plan flow and the
-mandatory cost checkpoint in [`infra/aws/README.md`](../../infra/aws/README.md). After
-explicit approval and apply, run the deployment script and record the actual account,
-resource IDs, immutable image SHA, migration task result, health responses, broker
-state, Valkey readiness evidence, exact ingestion event and its cleanup, and observed
-cost in a new checkpoint. Do not treat this document as proof of deployment until then.
+The root `.env` validation/bootstrap/plan flow has verified an AWS identity, created or
+identified the external GHCR secret, verified the immutable image, and saved an
+account-specific plan. No Terraform-managed AWS resource has been applied or deployed.
+Complete the mandatory cost checkpoint in [`infra/aws/README.md`](../../infra/aws/README.md),
+then obtain explicit approval before `terraform apply`. After approval and apply, run
+`scripts/deploy-aws-staging.ps1 -Deploy` and record the actual resource IDs, migration
+task result, health responses, broker state, Valkey readiness evidence, exact ingestion
+event and its cleanup, and observed cost in a new checkpoint. Do not treat this document
+as proof of deployment until then.

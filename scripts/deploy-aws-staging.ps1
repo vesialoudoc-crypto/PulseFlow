@@ -1,11 +1,102 @@
-[CmdletBinding()]
+[CmdletBinding(DefaultParameterSetName = "Plan")]
 param(
     [string]$TerraformDirectory = (Join-Path $PSScriptRoot "..\infra\aws"),
-    [string]$AwsProfile
+    [string]$AwsProfile,
+    [Parameter(ParameterSetName = "Deploy")]
+    [switch]$Deploy
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+. (Join-Path $PSScriptRoot "Import-PulseFlowDotEnv.ps1")
+
+function Get-RequiredEnvironmentVariable {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Name
+    )
+
+    $value = [Environment]::GetEnvironmentVariable($Name, [System.EnvironmentVariableTarget]::Process)
+    if ([string]::IsNullOrWhiteSpace($value)) {
+        throw "Required environment variable '$Name' is missing or empty in the repository-root .env file."
+    }
+
+    return $value
+}
+
+function Get-GhcrImageRepository {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Image
+    )
+
+    $match = [regex]::Match($Image, "^ghcr\.io/(?<repository>[a-z0-9][a-z0-9._-]*/pulseflow-api):sha-[0-9a-f]{40}$")
+    if (-not $match.Success) {
+        throw "PULSEFLOW_IMAGE must be an immutable GHCR pulseflow-api image with a full lowercase SHA tag."
+    }
+
+    return $match.Groups["repository"].Value
+}
+
+function Invoke-GhcrImageVerification {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Image,
+        [Parameter(Mandatory)]
+        [string]$Username,
+        [Parameter(Mandatory)]
+        [string]$Token
+    )
+
+    $repository = Get-GhcrImageRepository -Image $Image
+    $tokenEndpoint = "https://ghcr.io/token?service=ghcr.io&scope=$([System.Uri]::EscapeDataString("repository:$repository:pull"))"
+    $basicCredential = [Convert]::ToBase64String([System.Text.Encoding]::UTF8.GetBytes("$Username`:$Token"))
+    $client = [System.Net.Http.HttpClient]::new()
+
+    try {
+        $tokenRequest = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Get, $tokenEndpoint)
+        $tokenRequest.Headers.Authorization = [System.Net.Http.Headers.AuthenticationHeaderValue]::new("Basic", $basicCredential)
+        $tokenResponse = $client.SendAsync($tokenRequest).GetAwaiter().GetResult()
+        try {
+            if (-not $tokenResponse.IsSuccessStatusCode) {
+                throw "Unable to verify PULSEFLOW_IMAGE against GHCR. Check GHCR_USERNAME, GHCR_TOKEN package-read access, and that the image is published."
+            }
+
+            $registryToken = (($tokenResponse.Content.ReadAsStringAsync().GetAwaiter().GetResult() | ConvertFrom-Json).token)
+            if ([string]::IsNullOrWhiteSpace($registryToken)) {
+                throw "Unable to verify PULSEFLOW_IMAGE against GHCR. GHCR did not return a registry access token."
+            }
+        }
+        finally {
+            $tokenResponse.Dispose()
+            $tokenRequest.Dispose()
+        }
+
+        $manifestRequest = [System.Net.Http.HttpRequestMessage]::new([System.Net.Http.HttpMethod]::Head, "https://ghcr.io/v2/$repository/manifests/$($Image.Split(':')[-1])")
+        $manifestRequest.Headers.Authorization = [System.Net.Http.Headers.AuthenticationHeaderValue]::new("Bearer", $registryToken)
+        foreach ($manifestMediaType in @(
+            "application/vnd.oci.image.index.v1+json",
+            "application/vnd.oci.image.manifest.v1+json",
+            "application/vnd.docker.distribution.manifest.v2+json"
+        )) {
+            $manifestRequest.Headers.Accept.Add([System.Net.Http.Headers.MediaTypeWithQualityHeaderValue]::new($manifestMediaType))
+        }
+        $manifestResponse = $client.SendAsync($manifestRequest).GetAwaiter().GetResult()
+        try {
+            if (-not $manifestResponse.IsSuccessStatusCode) {
+                throw "Unable to verify PULSEFLOW_IMAGE against GHCR. Check GHCR_USERNAME, GHCR_TOKEN package-read access, and that the image is published."
+            }
+        }
+        finally {
+            $manifestResponse.Dispose()
+            $manifestRequest.Dispose()
+        }
+    }
+    finally {
+        $client.Dispose()
+    }
+}
 
 function Invoke-TerraformOutput {
     param(
@@ -46,10 +137,161 @@ function Invoke-Aws {
     $awsArguments += @("--region", $script:awsRegion)
     $result = & aws @awsArguments @Arguments
     if ($LASTEXITCODE -ne 0) {
-        throw "AWS CLI command failed: aws $($Arguments -join ' ')"
+        throw "AWS CLI command failed."
     }
 
     return $result
+}
+
+function Set-GhcrRegistryCredentialSecret {
+    param(
+        [Parameter(Mandatory)]
+        [string]$Username,
+        [Parameter(Mandatory)]
+        [string]$Token
+    )
+
+    $secretName = "pulseflow-staging/bootstrap/ghcr"
+    $awsArguments = @()
+    if (-not [string]::IsNullOrWhiteSpace($AwsProfile)) {
+        $awsArguments += @("--profile", $AwsProfile)
+    }
+    $awsArguments += @("--region", $script:awsRegion)
+
+    $describeResult = & aws @awsArguments @(
+        "secretsmanager",
+        "describe-secret",
+        "--secret-id",
+        $secretName,
+        "--query",
+        "ARN",
+        "--output",
+        "text"
+    ) 2>&1
+
+    $secretExists = $LASTEXITCODE -eq 0
+    if ($secretExists) {
+        $secretArn = ($describeResult | Out-String).Trim()
+        if ([string]::IsNullOrWhiteSpace($secretArn) -or $secretArn -eq "None") {
+            throw "AWS returned an invalid ARN for the existing GHCR credential secret."
+        }
+
+        return $secretArn
+    }
+    elseif (($describeResult | Out-String) -notmatch "ResourceNotFoundException") {
+        throw "Unable to identify the GHCR credential secret. Check AWS access before retrying."
+    }
+
+    $secretJson = [ordered]@{
+        username = $Username
+        password = $Token
+    } | ConvertTo-Json -Compress
+    $temporarySecretFile = New-TemporaryFile
+
+    try {
+        [System.IO.File]::WriteAllText(
+            $temporarySecretFile.FullName,
+            $secretJson,
+            [System.Text.UTF8Encoding]::new($false)
+        )
+        $secretStringFileReference = "file://$($temporarySecretFile.FullName)"
+
+        $secretArn = (Invoke-Aws -Arguments @(
+            "secretsmanager",
+            "create-secret",
+            "--name",
+            $secretName,
+            "--description",
+            "PulseFlow ECS private GHCR registry credential",
+            "--secret-string",
+            $secretStringFileReference,
+            "--query",
+            "ARN",
+            "--output",
+            "text"
+        )).Trim()
+    }
+    finally {
+        Remove-Item -LiteralPath $temporarySecretFile.FullName -Force -ErrorAction SilentlyContinue
+        $secretJson = $null
+    }
+
+    if ([string]::IsNullOrWhiteSpace($secretArn) -or $secretArn -eq "None") {
+        throw "AWS did not return a GHCR credential secret ARN."
+    }
+
+    return $secretArn
+}
+
+function Invoke-AwsStagingPlan {
+    param(
+        [Parameter(Mandatory)]
+        [string]$TerraformDirectory,
+        [Parameter(Mandatory)]
+        [string]$PulseFlowImage,
+        [Parameter(Mandatory)]
+        [string]$GhcrUsername,
+        [Parameter(Mandatory)]
+        [string]$GhcrToken
+    )
+
+    Invoke-Aws -Arguments @(
+        "sts",
+        "get-caller-identity",
+        "--output",
+        "json"
+    ) | Out-Host
+    Write-Host "AWS caller identity verified."
+
+    $ghcrSecretArn = Set-GhcrRegistryCredentialSecret -Username $GhcrUsername -Token $GhcrToken
+    Write-Host "GHCR credential secret is ready in AWS Secrets Manager."
+
+    Invoke-GhcrImageVerification -Image $PulseFlowImage -Username $GhcrUsername -Token $GhcrToken
+    Write-Host "PULSEFLOW_IMAGE is published and accessible through GHCR."
+
+    Push-Location $TerraformDirectory
+    try {
+        & terraform fmt -check -recursive
+        if ($LASTEXITCODE -ne 0) {
+            throw "terraform fmt -check -recursive failed."
+        }
+
+        & terraform init -input=false
+        if ($LASTEXITCODE -ne 0) {
+            throw "terraform init failed."
+        }
+
+        & terraform validate
+        if ($LASTEXITCODE -ne 0) {
+            throw "terraform validate failed."
+        }
+
+        $planArguments = @(
+            "plan",
+            "-input=false",
+            "-out",
+            "pulseflow-staging.tfplan",
+            "-var",
+            "aws_region=$script:awsRegion",
+            "-var",
+            "pulseflow_image=$PulseFlowImage",
+            "-var",
+            "ghcr_registry_credentials_secret_arn=$ghcrSecretArn"
+        )
+        if (-not [string]::IsNullOrWhiteSpace($AwsProfile)) {
+            $planArguments += @("-var", "aws_profile=$AwsProfile")
+        }
+
+        & terraform @planArguments
+        if ($LASTEXITCODE -ne 0) {
+            throw "terraform plan failed."
+        }
+    }
+    finally {
+        Pop-Location
+    }
+
+    Write-Host "Terraform plan saved to infra/aws/pulseflow-staging.tfplan. Terraform apply was not run."
 }
 
 function ConvertTo-ConnectionStringValue {
@@ -167,12 +409,45 @@ function Invoke-OneShotTask {
     return $taskArn
 }
 
+$repositoryRoot = (Resolve-Path (Join-Path $PSScriptRoot "..")).Path
+$dotenvPath = Join-Path $repositoryRoot ".env"
+Import-PulseFlowDotEnv -Path $dotenvPath
+
+$requiredEnvironmentVariables = @{}
+foreach ($variableName in @(
+    "AWS_ACCESS_KEY_ID",
+    "AWS_SECRET_ACCESS_KEY",
+    "AWS_REGION",
+    "AWS_DEFAULT_REGION",
+    "GHCR_USERNAME",
+    "GHCR_TOKEN",
+    "PULSEFLOW_IMAGE"
+)) {
+    $requiredEnvironmentVariables[$variableName] = Get-RequiredEnvironmentVariable -Name $variableName
+}
+
+if ($requiredEnvironmentVariables["AWS_REGION"] -ne $requiredEnvironmentVariables["AWS_DEFAULT_REGION"]) {
+    throw "AWS_REGION and AWS_DEFAULT_REGION in the repository-root .env file must match."
+}
+
+$script:awsRegion = $requiredEnvironmentVariables["AWS_REGION"]
+Get-GhcrImageRepository -Image $requiredEnvironmentVariables["PULSEFLOW_IMAGE"] | Out-Null
+
 if (-not (Get-Command terraform -ErrorAction SilentlyContinue)) {
     throw "Terraform must be available on PATH."
 }
 
 if (-not (Get-Command aws -ErrorAction SilentlyContinue)) {
     throw "AWS CLI v2 must be available on PATH."
+}
+
+if (-not $Deploy) {
+    Invoke-AwsStagingPlan `
+        -TerraformDirectory $TerraformDirectory `
+        -PulseFlowImage $requiredEnvironmentVariables["PULSEFLOW_IMAGE"] `
+        -GhcrUsername $requiredEnvironmentVariables["GHCR_USERNAME"] `
+        -GhcrToken $requiredEnvironmentVariables["GHCR_TOKEN"]
+    return
 }
 
 Push-Location $TerraformDirectory

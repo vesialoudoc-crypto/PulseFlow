@@ -40,6 +40,7 @@ variable "pulseflow_image" {
 variable "ghcr_registry_credentials_secret_arn" {
   description = "Existing AWS Secrets Manager ARN containing the private GHCR credential JSON. Terraform references this secret but never receives its token value."
   type        = string
+  sensitive   = true
 
   validation {
     condition     = can(regex("^arn:[^:]+:secretsmanager:[^:]+:[0-9]{12}:secret:.+$", var.ghcr_registry_credentials_secret_arn))

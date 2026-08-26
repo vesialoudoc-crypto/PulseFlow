@@ -118,65 +118,63 @@ during creation;
 creating a separate restricted application user through its private management API is
 deferred rather than silently adding a management path.
 
-## Bootstrap
+## Local bootstrap, plan, and required approval
 
-Install Terraform and AWS CLI v2 locally, configure a dedicated staging AWS profile,
-and verify its target account before continuing. Do not paste credentials into this
-repository or into ChatGPT.
+The repository-root `.env` is the one local bootstrap source. Copy
+[`.env.example`](../../.env.example) to `.env` and replace its placeholders. `.env` is
+ignored by Git: do not commit it, paste it into chat, or copy its values into `.tfvars`
+files.
 
-```powershell
-aws configure --profile pulseflow-staging
-aws sts get-caller-identity --profile pulseflow-staging
-```
+The following variables are required:
 
-Create a GitHub credential restricted to package read access for the private GHCR
-package. The following prompt-based command writes it directly to Secrets Manager and
-does not echo the token. Replace only the non-secret GitHub username and AWS account
-ID placeholders. Use an account/profile that is permitted to create this bootstrap
-secret.
+- `AWS_ACCESS_KEY_ID`
+- `AWS_SECRET_ACCESS_KEY`
+- `AWS_REGION`
+- `AWS_DEFAULT_REGION` (must equal `AWS_REGION`)
+- `GHCR_USERNAME`
+- `GHCR_TOKEN`
+- `PULSEFLOW_IMAGE`
 
-```powershell
-$region = "eu-central-1"
-$githubUser = "<github-user>"
-$secureToken = Read-Host "GHCR package-read token" -AsSecureString
-$tokenBstr = [Runtime.InteropServices.Marshal]::SecureStringToBSTR($secureToken)
-try {
-    $token = [Runtime.InteropServices.Marshal]::PtrToStringBSTR($tokenBstr)
-    $credentialJson = @{ username = $githubUser; password = $token } | ConvertTo-Json -Compress
-    aws secretsmanager create-secret `
-      --profile pulseflow-staging `
-      --region $region `
-      --name "pulseflow-staging/bootstrap/ghcr" `
-      --secret-string $credentialJson `
-      --query ARN `
-      --output text
-}
-finally {
-    if ($tokenBstr -ne [IntPtr]::Zero) {
-        [Runtime.InteropServices.Marshal]::ZeroFreeBSTR($tokenBstr)
-    }
-    Remove-Variable token -ErrorAction SilentlyContinue
-    Remove-Variable credentialJson -ErrorAction SilentlyContinue
-}
-```
+`PULSEFLOW_IMAGE` must be a published immutable
+`ghcr.io/<owner>/pulseflow-api:sha-<40-lowercase-hex-characters>` image. Use a GitHub
+credential that has only the package-read access needed for that image.
 
-Copy `terraform.tfvars.example` to a secure non-committed `.tfvars` location and set
-the immutable image and the command's returned secret ARN. Publish the selected image
-first through the manual **Publish PulseFlow.Api image** GitHub workflow. Never use
-`develop` or `latest` for `pulseflow_image`.
-
-## Validation, plan, and required approval
-
-From `infra/aws/`:
+From the repository root, install Terraform and AWS CLI v2, then run:
 
 ```powershell
-terraform fmt -check
-terraform init -backend=false
-terraform validate
-
-# Do not apply until the complete plan and cost checkpoint are reviewed.
-terraform plan -var-file <secure-path-to-staging.tfvars> -out pulseflow-staging.tfplan
+pwsh ./scripts/deploy-aws-staging.ps1
 ```
+
+The command uses the standard AWS environment-variable credential chain; no AWS CLI
+profile is required. An existing profile remains an optional override for operators
+who explicitly need one:
+
+```powershell
+pwsh ./scripts/deploy-aws-staging.ps1 -AwsProfile <optional-profile-name>
+```
+
+The default command performs this reproducible, plan-only sequence:
+
+1. loads root `.env` into the current process and validates every required variable;
+2. runs `aws sts get-caller-identity` in `AWS_REGION`;
+3. identifies `pulseflow-staging/bootstrap/ghcr` in AWS Secrets Manager, then creates
+   it with the current GHCR credential only if it is absent;
+4. verifies that `PULSEFLOW_IMAGE` is reachable in GHCR with the supplied package-read
+   credential;
+5. runs `terraform fmt -check -recursive`, `terraform init`, and `terraform validate`;
+6. runs the real Terraform plan, passing only `aws_region`, `pulseflow_image`, and the
+   resulting GHCR secret ARN as Terraform variables; and
+7. saves the plan to `infra/aws/pulseflow-staging.tfplan` and stops.
+
+The GHCR JSON value (`username` and `password`) is written to a temporary local file
+only so AWS CLI does not receive the token as a command-line argument; the file is
+removed immediately. Terraform receives only the secret ARN. The GHCR token is never
+placed in Terraform state, a plan, or a `.tfvars` file. The command does not run
+`terraform apply`.
+
+The dotenv parser accepts blank lines, full-line comments, `KEY=value`, values that
+contain `=`, and matching optional single or double quotes around values. It does not
+write credential or token values to output.
 
 Review every planned resource. It must contain no NAT gateway, no RDS public access,
 no public Valkey or broker, no Multi-AZ RDS, no RabbitMQ cluster, and no API replicas.
@@ -219,10 +217,12 @@ zero tasks so normal API startup cannot race the migration bundle.
 
 ```powershell
 terraform apply pulseflow-staging.tfplan
-pwsh ./scripts/deploy-aws-staging.ps1 -AwsProfile pulseflow-staging
+pwsh ./scripts/deploy-aws-staging.ps1 -Deploy
 ```
 
-Run the script from the repository root. It performs, in order:
+Run the script from the repository root. `-Deploy` is intentionally required because
+the script's default command performs the bootstrap and stops after Terraform plan.
+The post-apply rollout performs, in order:
 
 1. builds the two runtime connection-string secrets without printing them;
 2. verifies Amazon MQ is running, then runs `/app/migrations/pulseflow-migrations`
@@ -262,15 +262,14 @@ The successful environment is intentionally left running until the owner decides
 otherwise. Amazon MQ, ALB, RDS, public IPv4, and Fargate all incur charges while they
 exist or run; review the current AWS bill regularly.
 
-To recreate, repeat: configure profile → bootstrap/reference GHCR secret → publish a
-SHA image → init/validate → plan/cost approval → apply → run the deployment script.
+To recreate, repeat: root `.env` → bootstrap/identify GHCR secret → immutable-image
+verification → plan → cost review → explicit approval → apply → `-Deploy` rollout.
 
 To destroy, first inspect the destructive plan:
 
-```powershell
-terraform plan -destroy -var-file <secure-path-to-staging.tfvars>
-terraform destroy -var-file <secure-path-to-staging.tfvars>
-```
+Use the same non-secret Terraform inputs from the reviewed plan when preparing a
+destruction plan. Never provide the GHCR token to Terraform; only the existing GHCR
+secret ARN is a Terraform input.
 
 Destroying this disposable environment removes RDS, its data (there is no final
 snapshot), Valkey state, Amazon MQ broker data, generated RabbitMQ credentials, ECS

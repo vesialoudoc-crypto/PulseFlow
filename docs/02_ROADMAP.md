@@ -443,8 +443,9 @@ production-networking claim.
 
 The first AWS Terraform definition now exists in [`infra/aws/`](../infra/aws/). It is
 locally formatted and validated with Terraform 1.15.9, AWS provider 6.61.0, and Random
-provider 3.9.0, but no AWS plan, apply, state, or resources exist yet. The accepted
-first-plan configuration is Frankfurt (`eu-central-1`), a no-NAT VPC, ALB, one
+provider 3.9.0. An account-specific plan has been saved, but Terraform has not been
+applied and no Terraform-managed AWS resource exists. The accepted first-plan
+configuration is Frankfurt (`eu-central-1`), a no-NAT VPC, ALB, one
 0.25-vCPU/512-MiB Fargate API task after successful deployment, private Single-AZ
 `db.t4g.micro` RDS PostgreSQL 17, ElastiCache Serverless Valkey 8, and a private
 RabbitMQ 4.2 `mq.m7g.medium` Amazon MQ single instance. It keeps the GHCR SHA image
@@ -455,6 +456,15 @@ sensitive state, external GHCR credential bootstrap, explicit execution/task rol
 and a documented paid-resource checkpoint. See
 [AWS Staging Environment Architecture](architecture/aws-staging-environment.md) and
 [ADR 0021](decisions/0021-define-first-aws-staging-resource-configuration.md).
+
+The repository-root ignored `.env` is now the documented local bootstrap source for
+AWS credentials, region, the GHCR package-read credential, and the immutable image.
+Running `pwsh ./scripts/deploy-aws-staging.ps1` loads those values into the process,
+checks the AWS identity, creates or identifies the external GHCR secret without putting
+the token in Terraform, verifies the image, and produces a real Terraform plan. It
+stops before `terraform apply`; the required flow is `.env` → bootstrap → plan → cost
+review → explicit approval → apply later. AWS profiles remain optional rather than a
+required second local credential store.
 
 Azure remains the later portability proof. Azure Container Apps, PostgreSQL Flexible
 Server, Azure Managed Redis, and a Container Apps migration job fit the application,

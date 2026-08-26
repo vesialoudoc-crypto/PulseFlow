@@ -1,7 +1,10 @@
-# Copy this file outside the repository or to a non-committed *.tfvars file.
-# Never place real AWS, GHCR, database, or RabbitMQ credentials in Git.
+# Normal local staging planning uses the repository-root .env and
+# scripts/deploy-aws-staging.ps1, not this file. This is only a reference for an
+# operator who deliberately runs Terraform directly. Never put a GHCR token here.
 
-aws_profile = "pulseflow-staging"
+# aws_profile is optional. Leave it unset to use normal AWS_* environment-variable
+# credential discovery.
+# aws_profile = "optional-profile-name"
 
 pulseflow_image = "ghcr.io/<repository-owner>/pulseflow-api:sha-<40-lowercase-hex-characters>"
 
