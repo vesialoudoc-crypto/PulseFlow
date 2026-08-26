@@ -4,7 +4,9 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR 0020](0020-use-aws-for-first-cloud-deployment.md) on 2026-08-26.
+This remains the historical record of the Render staging experiment; no Render
+resources were created.
 
 ## Context
 

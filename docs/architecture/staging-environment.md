@@ -1,10 +1,15 @@
 # First Staging Environment Architecture
 
-## Purpose and environment model
+## Historical purpose and environment model
 
-The first disposable staging environment uses Render. It is an intermediate
-deployment and operations-learning environment, not the final cloud architecture.
-The environment model is:
+This is the historical Render staging design. It was accepted and represented in
+Terraform, but was later rejected as the actual deployment target because the full
+topology could not meet the intended free/cheap boundary. No Render resources were
+created. [ADR 0020](../decisions/0020-use-aws-for-first-cloud-deployment.md) selects
+AWS for the first real cloud deployment; the comparison is in
+[Cloud Portability Audit](cloud-portability-audit.md).
+
+The former environment model was:
 
 ```text
 Local: Docker Compose
@@ -12,10 +17,10 @@ Staging: Render
 Final cloud target: AWS, later
 ```
 
-Render staging exists to practise deployment and infrastructure automation, then to
-support deployed load measurements and bottleneck investigation. It does not select
+Render staging was designed to practise deployment and infrastructure automation, then
+to support deployed load measurements and bottleneck investigation. It did not select
 the future AWS production topology. [ADR 0018](../decisions/0018-use-render-for-first-disposable-staging-environment.md)
-records the platform and topology decision.
+records that historical decision.
 
 ## Target topology
 
