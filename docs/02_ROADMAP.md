@@ -364,7 +364,7 @@ implement deployment, then investigate and optimize a measured deployed constrai
 
 ## Stage 5: Deployment to AWS
 
-**Status:** In progress (next active major stage)
+**Status:** In progress (first disposable AWS lifecycle proven; next: deployed observability and performance measurement)
 
 ### Goals
 
@@ -441,6 +441,59 @@ allowing public-IP Fargate tasks whose security group accepts HTTP only from the
 PostgreSQL, Valkey, and RabbitMQ remain private. This is a staging boundary, not a
 production-networking claim.
 
+The first AWS Terraform definition exists in [`infra/aws/`](../infra/aws/). It is
+locally formatted and validated with Terraform 1.15.9, AWS provider 6.61.0, and Random
+provider 3.9.0. Its accepted first-plan configuration is Frankfurt (`eu-central-1`),
+a no-NAT VPC, ALB, one
+0.25-vCPU/512-MiB Fargate API task after successful deployment, private Single-AZ
+`db.t4g.micro` RDS PostgreSQL 17, ElastiCache Serverless Valkey 8, and a private
+RabbitMQ 4.2 `mq.m7g.medium` Amazon MQ single instance. It keeps the GHCR SHA image
+and adds an explicit deployment script: the service begins at zero tasks, a same-image
+migration task must exit zero, then the script rolls out exactly one API task and
+proves a unique HTTP-202 event reaches PostgreSQL. The configuration uses local
+sensitive state, external GHCR credential bootstrap, explicit execution/task roles,
+and a documented paid-resource checkpoint. See
+[AWS Staging Environment Architecture](architecture/aws-staging-environment.md) and
+[ADR 0021](decisions/0021-define-first-aws-staging-resource-configuration.md).
+
+The repository-root ignored `.env` is now the documented local bootstrap source for
+AWS credentials, region, the GHCR package-read credential, and the immutable image.
+The staging lifecycle is explicit: the default
+`pwsh ./scripts/deploy-aws-staging.ps1` bootstraps the external GHCR secret without
+putting the token in Terraform, verifies the image, and saves a plan; after plan/cost
+review and approval, `-Apply` applies exactly that saved plan and stops with the ECS
+service at desired count zero; `-Deploy` separately runs migration, rollout, and the
+end-to-end smoke proof; `-Destroy` removes Terraform-managed resources and verifies
+empty Terraform state. Normal destroy keeps the external, non-Terraform-managed GHCR
+bootstrap secret reusable; `-Destroy -DeleteBootstrapSecret` is the separate explicit
+complete-bootstrap-cleanup mode. AWS profiles remain optional rather than a required
+second local credential store. The script resolves installed Terraform and AWS CLI v2
+executables itself: it uses `PATH` first, then WinGet Terraform and standard Windows
+AWS CLI locations. The current reviewed saved plan requires Terraform 1.15.8, which
+`-Apply` verifies before it can invoke Terraform apply.
+
+The first disposable AWS lifecycle has been proven end to end. Terraform apply
+reported 49 added, 0 changed, and 0 destroyed. The deployment script then completed
+the migration ECS task, public-ALB `/health/live` and `/health/ready` HTTP-200 checks,
+an ingestion smoke POST returning HTTP 202, in-VPC PostgreSQL verification of the
+exact event, and removal of that exact smoke row. Terraform destroy subsequently
+reported 49 destroyed. Its post-destroy verification then exposed a PowerShell
+empty-pipeline `.Count` defect; a manual non-mutating `terraform state list` returned
+empty, confirming the Terraform-managed staging environment had been removed. The
+external GHCR bootstrap secret remains intentionally reusable because normal
+`-Destroy` was used without `-DeleteBootstrapSecret`.
+
+The first deployment also established that the RDS-managed master secret contains
+credentials, not endpoint metadata. Deployment tooling now obtains endpoint, port,
+and database name from `rds describe-db-instances` and retains the credential secret
+only for username and password. This is a correction within the accepted architecture,
+not a change to its resource mapping or lifecycle sequence.
+
+The next active technical objective is deployed observability and performance
+measurement: run a short controlled AWS load test, identify one measured bottleneck,
+and make one justified before/after optimization. Do not resume local bottleneck
+tuning on the shared Docker Desktop topology.
+
 Azure remains the later portability proof. Azure Container Apps, PostgreSQL Flexible
 Server, Azure Managed Redis, and a Container Apps migration job fit the application,
 but Azure has no first-party managed RabbitMQ equivalent. Self-hosting RabbitMQ is a
@@ -450,11 +503,13 @@ See [Cloud Portability Audit](architecture/cloud-portability-audit.md) and
 
 ### Do Not Decide in Advance
 
-The first AWS service mapping and staging networking boundary are accepted in ADR 0020.
-Exact AWS region, task and broker sizing, RDS/Valkey configuration, protected remote
-state design, authenticated image-credential bootstrap, release automation, and the
-final production network topology remain undecided. API and RabbitMQ-consumer
-decoupling also remains deferred.
+The first AWS service mapping, staging networking boundary, selected first-plan
+region/sizes, local-state boundary, GHCR bootstrap boundary, and manual migration-first
+release mechanism are accepted in ADRs 0020 and 0021. Automatic deployment/CI/CD,
+deployed observability and performance measurement, a measured bottleneck and
+justified before/after optimization, production networking/HA, restricted RabbitMQ
+user management, and the final production topology remain unresolved. API and
+RabbitMQ-consumer decoupling also remains deferred.
 
 ## Stage 6: Production Hardening
 
