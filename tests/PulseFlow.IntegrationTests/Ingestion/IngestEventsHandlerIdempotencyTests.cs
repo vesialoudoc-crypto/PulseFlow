@@ -1,6 +1,7 @@
 using System.Text;
 using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
+using Microsoft.Extensions.Options;
 using PulseFlow.Api.Ingestion;
 using PulseFlow.Api.Ingestion.Contracts;
 using PulseFlow.Api.Ingestion.Ndjson;
@@ -48,7 +49,7 @@ public sealed class IngestEventsHandlerIdempotencyTests : IClassFixture<PostgreS
         await using var firstContext = CreateDbContext();
         var failingHandler = CreateHandler(
             new FailOnStoreCallEventChunkStore(
-                new EfCoreEventChunkStore(firstContext),
+                new EfCoreEventChunkStore(firstContext, Options.Create(new PostgreSqlOptions())),
                 failingCallNumber: 2));
 
         // Act
@@ -57,7 +58,8 @@ public sealed class IngestEventsHandlerIdempotencyTests : IClassFixture<PostgreS
 
         await using (var replayContext = CreateDbContext())
         {
-            var replayHandler = CreateHandler(new EfCoreEventChunkStore(replayContext));
+            var replayHandler = CreateHandler(
+                new EfCoreEventChunkStore(replayContext, Options.Create(new PostgreSqlOptions())));
             await replayHandler.HandleAsync(ReadRecordsAsync(batch));
         }
 

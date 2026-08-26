@@ -1,6 +1,7 @@
 using System.Text;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.EntityFrameworkCore.Storage;
+using Microsoft.Extensions.Options;
 using Npgsql;
 using NpgsqlTypes;
 using PulseFlow.Api.Ingestion.Contracts;
@@ -11,10 +12,12 @@ namespace PulseFlow.Api.Persistence.Events;
 public sealed class EfCoreEventChunkStore : IEventChunkStore
 {
     private readonly PulseFlowDbContext _dbContext;
+    private readonly PostgreSqlOptions _options;
 
-    public EfCoreEventChunkStore(PulseFlowDbContext dbContext)
+    public EfCoreEventChunkStore(PulseFlowDbContext dbContext, IOptions<PostgreSqlOptions> options)
     {
         _dbContext = dbContext;
+        _options = options.Value;
     }
 
     public async Task StoreAsync(IReadOnlyCollection<EventEnvelope> events, CancellationToken ct = default)
@@ -33,6 +36,7 @@ public sealed class EfCoreEventChunkStore : IEventChunkStore
             Connection = connection,
             Transaction = databaseTransaction,
             CommandText = CreateInsertCommand(events),
+            CommandTimeout = _options.CommandTimeoutSeconds,
         };
 
         var receivedAt = DateTime.UtcNow;

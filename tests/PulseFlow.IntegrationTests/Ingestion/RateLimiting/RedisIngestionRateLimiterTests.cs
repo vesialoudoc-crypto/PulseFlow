@@ -132,6 +132,9 @@ public sealed class RedisIngestionRateLimiterTests : IClassFixture<RedisFixture>
                     }
                 )
             );
+            services.AddSingleton<IOptions<RedisOptions>>(
+                Options.Create(new RedisOptions { AsyncTimeout = TimeSpan.FromSeconds(1) })
+            );
             services.AddSingleton<IIngestionRateLimiter, RedisIngestionRateLimiter>();
             services.AddSingleton(publisher);
         });
@@ -165,6 +168,7 @@ public sealed class RedisIngestionRateLimiterTests : IClassFixture<RedisFixture>
                     WindowDuration = windowDuration,
                 }
             ),
+            Options.Create(new RedisOptions { AsyncTimeout = TimeSpan.FromSeconds(1) }),
             NullLogger<RedisIngestionRateLimiter>.Instance
         );
     }
