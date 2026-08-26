@@ -2,14 +2,26 @@
 param(
     [string]$TerraformDirectory = (Join-Path $PSScriptRoot "..\infra\aws"),
     [string]$AwsProfile,
+    [Parameter(ParameterSetName = "Apply", Mandatory)]
+    [switch]$Apply,
     [Parameter(ParameterSetName = "Deploy")]
-    [switch]$Deploy
+    [switch]$Deploy,
+    [Parameter(ParameterSetName = "Destroy")]
+    [switch]$Destroy,
+    [Parameter(ParameterSetName = "Destroy")]
+    [switch]$DeleteBootstrapSecret
 )
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+if ($DeleteBootstrapSecret -and -not $Destroy) {
+    throw "-DeleteBootstrapSecret is valid only together with -Destroy."
+}
+
 . (Join-Path $PSScriptRoot "Import-PulseFlowDotEnv.ps1")
+
+$script:ghcrBootstrapSecretName = "pulseflow-staging/bootstrap/ghcr"
 
 function Get-RequiredEnvironmentVariable {
     param(
@@ -151,7 +163,6 @@ function Set-GhcrRegistryCredentialSecret {
         [string]$Token
     )
 
-    $secretName = "pulseflow-staging/bootstrap/ghcr"
     $awsArguments = @()
     if (-not [string]::IsNullOrWhiteSpace($AwsProfile)) {
         $awsArguments += @("--profile", $AwsProfile)
@@ -162,7 +173,7 @@ function Set-GhcrRegistryCredentialSecret {
         "secretsmanager",
         "describe-secret",
         "--secret-id",
-        $secretName,
+        $script:ghcrBootstrapSecretName,
         "--query",
         "ARN",
         "--output",
@@ -200,7 +211,7 @@ function Set-GhcrRegistryCredentialSecret {
             "secretsmanager",
             "create-secret",
             "--name",
-            $secretName,
+            $script:ghcrBootstrapSecretName,
             "--description",
             "PulseFlow ECS private GHCR registry credential",
             "--secret-string",
@@ -223,6 +234,74 @@ function Set-GhcrRegistryCredentialSecret {
     return $secretArn
 }
 
+function Get-GhcrRegistryCredentialSecretArn {
+    $awsArguments = @()
+    if (-not [string]::IsNullOrWhiteSpace($AwsProfile)) {
+        $awsArguments += @("--profile", $AwsProfile)
+    }
+    $awsArguments += @("--region", $script:awsRegion)
+
+    $describeResult = & aws @awsArguments @(
+        "secretsmanager",
+        "describe-secret",
+        "--secret-id",
+        $script:ghcrBootstrapSecretName,
+        "--query",
+        "ARN",
+        "--output",
+        "text"
+    ) 2>&1
+
+    if ($LASTEXITCODE -ne 0) {
+        if (($describeResult | Out-String) -match "ResourceNotFoundException") {
+            throw "The external GHCR bootstrap secret '$script:ghcrBootstrapSecretName' was not found. Terraform destroy requires its existing ARN and will not recreate the secret."
+        }
+
+        throw "Unable to resolve the external GHCR bootstrap secret ARN. Check AWS access before retrying."
+    }
+
+    $secretArn = ($describeResult | Out-String).Trim()
+    if ([string]::IsNullOrWhiteSpace($secretArn) -or $secretArn -eq "None") {
+        throw "AWS returned an invalid ARN for the external GHCR bootstrap secret."
+    }
+
+    return $secretArn
+}
+
+function Remove-GhcrRegistryCredentialSecret {
+    param(
+        [Parameter(Mandatory)]
+        [string]$SecretArn
+    )
+
+    Invoke-Aws -Arguments @(
+        "secretsmanager",
+        "delete-secret",
+        "--secret-id",
+        $SecretArn,
+        "--force-delete-without-recovery",
+        "--output",
+        "json"
+    ) | Out-Null
+}
+
+function Confirm-AwsCallerIdentity {
+    Invoke-Aws -Arguments @(
+        "sts",
+        "get-caller-identity",
+        "--output",
+        "json"
+    ) | Out-Host
+    Write-Host "AWS caller identity verified."
+}
+
+function Initialize-TerraformConfiguration {
+    & terraform init -input=false
+    if ($LASTEXITCODE -ne 0) {
+        throw "terraform init failed."
+    }
+}
+
 function Invoke-AwsStagingPlan {
     param(
         [Parameter(Mandatory)]
@@ -235,13 +314,7 @@ function Invoke-AwsStagingPlan {
         [string]$GhcrToken
     )
 
-    Invoke-Aws -Arguments @(
-        "sts",
-        "get-caller-identity",
-        "--output",
-        "json"
-    ) | Out-Host
-    Write-Host "AWS caller identity verified."
+    Confirm-AwsCallerIdentity
 
     $ghcrSecretArn = Set-GhcrRegistryCredentialSecret -Username $GhcrUsername -Token $GhcrToken
     Write-Host "GHCR credential secret is ready in AWS Secrets Manager."
@@ -256,10 +329,7 @@ function Invoke-AwsStagingPlan {
             throw "terraform fmt -check -recursive failed."
         }
 
-        & terraform init -input=false
-        if ($LASTEXITCODE -ne 0) {
-            throw "terraform init failed."
-        }
+        Initialize-TerraformConfiguration
 
         & terraform validate
         if ($LASTEXITCODE -ne 0) {
@@ -292,6 +362,96 @@ function Invoke-AwsStagingPlan {
     }
 
     Write-Host "Terraform plan saved to infra/aws/pulseflow-staging.tfplan. Terraform apply was not run."
+}
+
+function Invoke-AwsStagingApply {
+    param(
+        [Parameter(Mandatory)]
+        [string]$TerraformDirectory
+    )
+
+    Confirm-AwsCallerIdentity
+
+    $savedPlanPath = Join-Path $TerraformDirectory "pulseflow-staging.tfplan"
+    if (-not (Test-Path -LiteralPath $savedPlanPath -PathType Leaf)) {
+        throw "Reviewed saved Terraform plan is missing: infra/aws/pulseflow-staging.tfplan. Run pwsh ./scripts/deploy-aws-staging.ps1, review the plan, and explicitly approve it before retrying -Apply."
+    }
+
+    Push-Location $TerraformDirectory
+    try {
+        Initialize-TerraformConfiguration
+
+        & terraform apply -input=false "pulseflow-staging.tfplan"
+        if ($LASTEXITCODE -ne 0) {
+            throw "Terraform could not apply the reviewed saved plan. Ensure infra/aws/pulseflow-staging.tfplan was created with the installed Terraform version and is still compatible. The script did not generate a replacement plan."
+        }
+    }
+    finally {
+        Pop-Location
+    }
+
+    Write-Host "Terraform apply succeeded. AWS staging infrastructure exists, but PulseFlow.Api has not been deployed: the ECS service desired count remains zero. Run -Deploy explicitly when ready."
+}
+
+function Invoke-AwsStagingDestroy {
+    param(
+        [Parameter(Mandatory)]
+        [string]$TerraformDirectory,
+        [Parameter(Mandatory)]
+        [string]$PulseFlowImage,
+        [Parameter(Mandatory)]
+        [switch]$DeleteBootstrapSecret
+    )
+
+    Confirm-AwsCallerIdentity
+    $ghcrSecretArn = Get-GhcrRegistryCredentialSecretArn
+
+    Push-Location $TerraformDirectory
+    try {
+        Initialize-TerraformConfiguration
+
+        $destroyArguments = @(
+            "destroy",
+            "-input=false",
+            "-auto-approve",
+            "-var",
+            "aws_region=$script:awsRegion",
+            "-var",
+            "pulseflow_image=$PulseFlowImage",
+            "-var",
+            "ghcr_registry_credentials_secret_arn=$ghcrSecretArn"
+        )
+        if (-not [string]::IsNullOrWhiteSpace($AwsProfile)) {
+            $destroyArguments += @("-var", "aws_profile=$AwsProfile")
+        }
+
+        & terraform @destroyArguments
+        if ($LASTEXITCODE -ne 0) {
+            throw "terraform destroy failed. Terraform-managed staging resources may remain; inspect Terraform output and state before retrying."
+        }
+
+        $remainingResources = @(& terraform state list)
+        if ($LASTEXITCODE -ne 0) {
+            throw "terraform state list failed after destroy; unable to verify that no Terraform-managed resources remain."
+        }
+
+        if (($remainingResources | Where-Object { -not [string]::IsNullOrWhiteSpace($_) }).Count -ne 0) {
+            throw "Terraform destroy completed, but Terraform state still reports managed resources. Inspect terraform state list before any further action."
+        }
+    }
+    finally {
+        Pop-Location
+    }
+
+    Write-Host "Terraform destroy succeeded and Terraform reports no managed staging resources remaining."
+
+    if ($DeleteBootstrapSecret) {
+        Remove-GhcrRegistryCredentialSecret -SecretArn $ghcrSecretArn
+        Write-Host "The external GHCR bootstrap credential secret was not Terraform-managed and was deleted because -DeleteBootstrapSecret was specified."
+        return
+    }
+
+    Write-Host "The external GHCR bootstrap credential secret '$script:ghcrBootstrapSecretName' was not Terraform-managed and remains reusable."
 }
 
 function ConvertTo-ConnectionStringValue {
@@ -414,15 +574,36 @@ $dotenvPath = Join-Path $repositoryRoot ".env"
 Import-PulseFlowDotEnv -Path $dotenvPath
 
 $requiredEnvironmentVariables = @{}
-foreach ($variableName in @(
-    "AWS_ACCESS_KEY_ID",
-    "AWS_SECRET_ACCESS_KEY",
-    "AWS_REGION",
-    "AWS_DEFAULT_REGION",
-    "GHCR_USERNAME",
-    "GHCR_TOKEN",
-    "PULSEFLOW_IMAGE"
-)) {
+if ($PSCmdlet.ParameterSetName -eq "Plan") {
+    $requiredVariableNames = @(
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_REGION",
+        "AWS_DEFAULT_REGION",
+        "GHCR_USERNAME",
+        "GHCR_TOKEN",
+        "PULSEFLOW_IMAGE"
+    )
+}
+elseif ($PSCmdlet.ParameterSetName -eq "Destroy") {
+    $requiredVariableNames = @(
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_REGION",
+        "AWS_DEFAULT_REGION",
+        "PULSEFLOW_IMAGE"
+    )
+}
+else {
+    $requiredVariableNames = @(
+        "AWS_ACCESS_KEY_ID",
+        "AWS_SECRET_ACCESS_KEY",
+        "AWS_REGION",
+        "AWS_DEFAULT_REGION"
+    )
+}
+
+foreach ($variableName in $requiredVariableNames) {
     $requiredEnvironmentVariables[$variableName] = Get-RequiredEnvironmentVariable -Name $variableName
 }
 
@@ -431,7 +612,9 @@ if ($requiredEnvironmentVariables["AWS_REGION"] -ne $requiredEnvironmentVariable
 }
 
 $script:awsRegion = $requiredEnvironmentVariables["AWS_REGION"]
-Get-GhcrImageRepository -Image $requiredEnvironmentVariables["PULSEFLOW_IMAGE"] | Out-Null
+if ($PSCmdlet.ParameterSetName -in @("Plan", "Destroy")) {
+    Get-GhcrImageRepository -Image $requiredEnvironmentVariables["PULSEFLOW_IMAGE"] | Out-Null
+}
 
 if (-not (Get-Command terraform -ErrorAction SilentlyContinue)) {
     throw "Terraform must be available on PATH."
@@ -441,12 +624,25 @@ if (-not (Get-Command aws -ErrorAction SilentlyContinue)) {
     throw "AWS CLI v2 must be available on PATH."
 }
 
-if (-not $Deploy) {
+if ($PSCmdlet.ParameterSetName -eq "Plan") {
     Invoke-AwsStagingPlan `
         -TerraformDirectory $TerraformDirectory `
         -PulseFlowImage $requiredEnvironmentVariables["PULSEFLOW_IMAGE"] `
         -GhcrUsername $requiredEnvironmentVariables["GHCR_USERNAME"] `
         -GhcrToken $requiredEnvironmentVariables["GHCR_TOKEN"]
+    return
+}
+
+if ($Apply) {
+    Invoke-AwsStagingApply -TerraformDirectory $TerraformDirectory
+    return
+}
+
+if ($Destroy) {
+    Invoke-AwsStagingDestroy `
+        -TerraformDirectory $TerraformDirectory `
+        -PulseFlowImage $requiredEnvironmentVariables["PULSEFLOW_IMAGE"] `
+        -DeleteBootstrapSecret:$DeleteBootstrapSecret
     return
 }
 

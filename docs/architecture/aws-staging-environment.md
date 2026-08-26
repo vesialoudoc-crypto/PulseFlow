@@ -112,8 +112,13 @@ The root `.env` validation/bootstrap/plan flow has verified an AWS identity, cre
 identified the external GHCR secret, verified the immutable image, and saved an
 account-specific plan. No Terraform-managed AWS resource has been applied or deployed.
 Complete the mandatory cost checkpoint in [`infra/aws/README.md`](../../infra/aws/README.md),
-then obtain explicit approval before `terraform apply`. After approval and apply, run
-`scripts/deploy-aws-staging.ps1 -Deploy` and record the actual resource IDs, migration
-task result, health responses, broker state, Valkey readiness evidence, exact ingestion
-event and its cleanup, and observed cost in a new checkpoint. Do not treat this document
-as proof of deployment until then.
+then obtain explicit approval before
+`pwsh ./scripts/deploy-aws-staging.ps1 -Apply`. That command applies only the saved
+reviewed plan and stops before deployment. Then run
+`pwsh ./scripts/deploy-aws-staging.ps1 -Deploy` and record the actual resource IDs,
+migration task result, health responses, broker state, Valkey readiness evidence, exact
+ingestion event and its cleanup, and observed cost in a new checkpoint. After the
+short-lived proof is recorded, `pwsh ./scripts/deploy-aws-staging.ps1 -Destroy` removes
+the Terraform-managed environment but keeps the external GHCR bootstrap secret unless
+the explicit `-DeleteBootstrapSecret` switch is also supplied. Do not treat this
+document as proof of deployment until then.

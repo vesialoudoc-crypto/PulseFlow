@@ -459,12 +459,16 @@ and a documented paid-resource checkpoint. See
 
 The repository-root ignored `.env` is now the documented local bootstrap source for
 AWS credentials, region, the GHCR package-read credential, and the immutable image.
-Running `pwsh ./scripts/deploy-aws-staging.ps1` loads those values into the process,
-checks the AWS identity, creates or identifies the external GHCR secret without putting
-the token in Terraform, verifies the image, and produces a real Terraform plan. It
-stops before `terraform apply`; the required flow is `.env` → bootstrap → plan → cost
-review → explicit approval → apply later. AWS profiles remain optional rather than a
-required second local credential store.
+The staging lifecycle is explicit: the default
+`pwsh ./scripts/deploy-aws-staging.ps1` bootstraps the external GHCR secret without
+putting the token in Terraform, verifies the image, and saves a plan; after plan/cost
+review and approval, `-Apply` applies exactly that saved plan and stops with the ECS
+service at desired count zero; `-Deploy` separately runs migration, rollout, and the
+end-to-end smoke proof; `-Destroy` removes Terraform-managed resources and verifies
+empty Terraform state. Normal destroy keeps the external, non-Terraform-managed GHCR
+bootstrap secret reusable; `-Destroy -DeleteBootstrapSecret` is the separate explicit
+complete-bootstrap-cleanup mode. AWS profiles remain optional rather than a required
+second local credential store.
 
 Azure remains the later portability proof. Azure Container Apps, PostgreSQL Flexible
 Server, Azure Managed Redis, and a Container Apps migration job fit the application,

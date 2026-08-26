@@ -176,6 +176,61 @@ The dotenv parser accepts blank lines, full-line comments, `KEY=value`, values t
 contain `=`, and matching optional single or double quotes around values. It does not
 write credential or token values to output.
 
+## Explicit disposable staging lifecycle
+
+The first intended use is deliberately short-lived: create the staging environment,
+deploy and prove the API end to end, record the evidence, then remove the paid
+infrastructure. Keep every lifecycle phase separate and inspectable:
+
+1. **PLAN** — bootstrap the external GHCR credential if needed, validate the image and
+   Terraform configuration, then save a plan. This command does not apply it.
+
+   ```powershell
+   pwsh ./scripts/deploy-aws-staging.ps1
+   ```
+
+2. **Review plan/cost and approve** — inspect
+   `infra/aws/pulseflow-staging.tfplan`, its planned resources, and the cost checkpoint
+   below. Obtain explicit approval before continuing.
+
+3. **APPLY** — load root `.env`, validate the AWS identity, and apply only the existing
+   reviewed saved plan. It does not create a replacement plan and does not run a
+   deployment. After success, the ECS service remains at desired count zero.
+
+   ```powershell
+   pwsh ./scripts/deploy-aws-staging.ps1 -Apply
+   ```
+
+4. **DEPLOY + VERIFY** — run the migration, roll out the API, require health checks,
+   and execute the ingestion smoke proof. This phase is never started by `-Apply`.
+
+   ```powershell
+   pwsh ./scripts/deploy-aws-staging.ps1 -Deploy
+   ```
+
+5. **DESTROY** — load root `.env`, validate the AWS identity, resolve the existing
+   external GHCR secret ARN, destroy Terraform-managed staging resources, and verify
+   that Terraform state is empty.
+
+   ```powershell
+   pwsh ./scripts/deploy-aws-staging.ps1 -Destroy
+   ```
+
+   Normal destroy removes the expensive staging environment but deliberately keeps the
+   small external `pulseflow-staging/bootstrap/ghcr` credential secret. It is not
+   Terraform-managed and can be reused for a later disposable run.
+
+   To delete that external bootstrap secret as well, request it explicitly after the
+   Terraform destruction succeeds:
+
+   ```powershell
+   pwsh ./scripts/deploy-aws-staging.ps1 -Destroy -DeleteBootstrapSecret
+   ```
+
+   `-DeleteBootstrapSecret` is valid only with `-Destroy`; it never runs implicitly.
+   It uses AWS's force-delete-without-recovery behavior, so treat this complete
+   bootstrap cleanup as permanent.
+
 Review every planned resource. It must contain no NAT gateway, no RDS public access,
 no public Valkey or broker, no Multi-AZ RDS, no RabbitMQ cluster, and no API replicas.
 The plan will also show the exact RDS PostgreSQL 17 patch selected for Frankfurt.
@@ -212,17 +267,17 @@ resources. Do not apply merely because this definition validates.
 
 ## Controlled migration, rollout, and smoke proof
 
-After approval, apply only the reviewed saved plan. The initial ECS service remains at
-zero tasks so normal API startup cannot race the migration bundle.
+After approval, use the explicit `-Apply` phase to apply only the reviewed saved plan.
+The initial ECS service remains at zero tasks so normal API startup cannot race the
+migration bundle. `-Apply` stops after infrastructure creation; `-Deploy` must be
+requested separately.
 
 ```powershell
-terraform apply pulseflow-staging.tfplan
+pwsh ./scripts/deploy-aws-staging.ps1 -Apply
 pwsh ./scripts/deploy-aws-staging.ps1 -Deploy
 ```
 
-Run the script from the repository root. `-Deploy` is intentionally required because
-the script's default command performs the bootstrap and stops after Terraform plan.
-The post-apply rollout performs, in order:
+Run both commands from the repository root. The post-apply rollout performs, in order:
 
 1. builds the two runtime connection-string secrets without printing them;
 2. verifies Amazon MQ is running, then runs `/app/migrations/pulseflow-migrations`
@@ -262,18 +317,25 @@ The successful environment is intentionally left running until the owner decides
 otherwise. Amazon MQ, ALB, RDS, public IPv4, and Fargate all incur charges while they
 exist or run; review the current AWS bill regularly.
 
-To recreate, repeat: root `.env` → bootstrap/identify GHCR secret → immutable-image
-verification → plan → cost review → explicit approval → apply → `-Deploy` rollout.
+To recreate, repeat the lifecycle above: root `.env` → bootstrap/identify GHCR secret
+→ immutable-image verification → plan → cost review → explicit approval → `-Apply` →
+`-Deploy` rollout.
 
-To destroy, first inspect the destructive plan:
+To remove the disposable environment after evidence has been recorded, run:
 
-Use the same non-secret Terraform inputs from the reviewed plan when preparing a
-destruction plan. Never provide the GHCR token to Terraform; only the existing GHCR
-secret ARN is a Terraform input.
+```powershell
+pwsh ./scripts/deploy-aws-staging.ps1 -Destroy
+```
+
+`-Destroy` uses the same non-secret Terraform inputs (`aws_region`, `pulseflow_image`,
+and the existing GHCR credential-secret ARN). It does not pass the GHCR token to
+Terraform. The command waits for Terraform destruction to finish and then requires
+Terraform state to contain no managed resources.
 
 Destroying this disposable environment removes RDS, its data (there is no final
 snapshot), Valkey state, Amazon MQ broker data, generated RabbitMQ credentials, ECS
 resources, ALB, public IP allocation, and the Terraform-managed runtime-secret
 metadata. Back up any PostgreSQL data worth retaining before destruction. The
-externally bootstrapped GHCR credential secret is deliberately not Terraform-owned;
-delete it separately when no longer needed.
+externally bootstrapped GHCR credential secret is deliberately not Terraform-owned and
+remains after normal destroy. Use `-Destroy -DeleteBootstrapSecret` only when that
+reusable bootstrap configuration should also be removed.
