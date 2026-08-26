@@ -491,6 +491,25 @@ disables Kestrel's request-size limit so this dynamic application limit owns the
 ID and do not publish to RabbitMQ. This does not add compression, record-count limits,
 message-size limits, parsing in the HTTP API, or infrastructure limits.
 
+The explicit dependency-timeout slice is also implemented through component-owned
+options. PostgreSQL uses Npgsql connection and command timeouts; RabbitMQ uses
+RabbitMQ.Client connection, handshake, and continuation timeouts plus validated local
+token-based deadlines for topology, publisher-slot wait/creation, and publish calls.
+Uncertain publisher channels and failed-startup connections are detached immediately;
+their background cleanup has its own one-second `RabbitMq:CleanupTimeout` best-effort
+budget and does not delay the triggering publish timeout, caller cancellation, or
+startup failure. Redis creates its shared multiplexer asynchronously inside the startup
+initializer, so the overall startup token bounds its logical wait; a connection that
+finishes after cancellation is disposed. Redis also uses StackExchange.Redis connect
+and async timeouts, with `WaitAsync` only for caller cancellation. RabbitMQ's fixed
+publisher slots remain recoverable for later batches without retrying the earlier batch,
+and make readiness unhealthy if none are usable. `Startup` owns one linked budget for
+the complete startup sequence, and `HealthChecks` sets built-in readiness-registration
+timeouts. Redis rate-limit timeout fails closed as HTTP 503 without publishing;
+RabbitMQ publish timeout cannot return HTTP 202; startup timeout makes readiness failed
+and stops startup. See
+[ADR 0020](decisions/0020-use-explicit-dependency-timeout-budgets.md).
+
 ## Deferred Portfolio and Production Coverage
 
 The following are intentional future learning and portfolio concerns, not rejected

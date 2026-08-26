@@ -119,6 +119,44 @@ public sealed class EventsControllerTests
     }
 
     [Fact]
+    public async Task IngestAsync_PublisherTimesOut_DoesNotReturnAccepted()
+    {
+        // Arrange
+        var publisher = new RecordingIngestionBatchPublisher(
+            new TimeoutException("RabbitMQ publish/confirmation timed out."));
+        var controller = CreateController(
+            publisher,
+            new StubIngestionBatchBodyReader(_ => Task.FromResult(CreateSuccessfulResult(new TrackingArrayPool(), CreatePayload(4)))));
+
+        // Act
+        var exception = await Assert.ThrowsAsync<TimeoutException>(() =>
+            controller.IngestAsync(CancellationToken.None));
+
+        // Assert
+        Assert.Equal("RabbitMQ publish/confirmation timed out.", exception.Message);
+        Assert.Equal(1, publisher.PublishCallCount);
+    }
+
+    [Fact]
+    public async Task IngestAsync_RedisTimeoutReturnsUnavailable_ReturnsServiceUnavailableAndDoesNotPublish()
+    {
+        // Arrange
+        var publisher = new RecordingIngestionBatchPublisher();
+        var controller = CreateController(
+            publisher,
+            new StubIngestionBatchBodyReader(_ => Task.FromResult(CreateSuccessfulResult(new TrackingArrayPool(), CreatePayload(4)))),
+            new UnavailableIngestionRateLimiter());
+
+        // Act
+        var result = await controller.IngestAsync(CancellationToken.None);
+
+        // Assert
+        var statusCodeResult = Assert.IsType<StatusCodeResult>(result);
+        Assert.Equal(StatusCodes.Status503ServiceUnavailable, statusCodeResult.StatusCode);
+        Assert.Equal(0, publisher.PublishCallCount);
+    }
+
+    [Fact]
     public async Task IngestAsync_BodyReaderIsCanceled_PropagatesCancellation()
     {
         // Arrange
@@ -142,13 +180,14 @@ public sealed class EventsControllerTests
 
     private static EventsController CreateController(
         IIngestionBatchPublisher publisher,
-        IIngestionBatchBodyReader bodyReader
+        IIngestionBatchBodyReader bodyReader,
+        IIngestionRateLimiter? rateLimiter = null
     )
     {
         var httpContext = new DefaultHttpContext();
         httpContext.TraceIdentifier = "test-trace-id";
 
-        return new EventsController(publisher, new AllowedIngestionRateLimiter(), bodyReader)
+        return new EventsController(publisher, rateLimiter ?? new AllowedIngestionRateLimiter(), bodyReader)
         {
             ControllerContext = new ControllerContext { HttpContext = httpContext },
         };
@@ -249,6 +288,14 @@ public sealed class EventsControllerTests
         public Task<IngestionRateLimitResult> TryAllowAsync(CancellationToken ct)
         {
             return Task.FromResult(new IngestionRateLimitResult(IngestionRateLimitStatus.Allowed));
+        }
+    }
+
+    private sealed class UnavailableIngestionRateLimiter : IIngestionRateLimiter
+    {
+        public Task<IngestionRateLimitResult> TryAllowAsync(CancellationToken ct)
+        {
+            return Task.FromResult(new IngestionRateLimitResult(IngestionRateLimitStatus.Unavailable));
         }
     }
 

@@ -39,7 +39,7 @@ internal sealed class PulseFlowComponentTestHost : IAsyncDisposable
                 ["Ingestion:MaxBatchBytes"] = maxBatchBytes.ToString(),
             }
         );
-        builder.Services.AddPulseFlowHttpApplication();
+        builder.Services.AddPulseFlowHttpApplication(builder.Configuration);
         builder.Services.AddIngestionOptions(builder.Configuration);
         configureServices(builder.Services);
 

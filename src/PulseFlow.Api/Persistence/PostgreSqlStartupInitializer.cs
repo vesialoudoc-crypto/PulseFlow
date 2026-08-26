@@ -17,7 +17,8 @@ public sealed class PostgreSqlStartupInitializer : IStartupInitializer
         await using var scope = _scopeFactory.CreateAsyncScope();
         var dbContext = scope.ServiceProvider.GetRequiredService<PulseFlowDbContext>();
 
-        if (!await dbContext.Database.CanConnectAsync(ct))
+        var canConnect = await dbContext.Database.CanConnectAsync(ct);
+        if (!canConnect)
         {
             throw new InvalidOperationException("PostgreSQL is not available during startup initialization.");
         }

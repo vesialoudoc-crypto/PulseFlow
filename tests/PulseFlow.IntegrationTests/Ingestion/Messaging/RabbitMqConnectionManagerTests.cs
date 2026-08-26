@@ -1,5 +1,6 @@
 using PulseFlow.Api.Ingestion.Messaging;
 using PulseFlow.Api.Ingestion.Messaging.RabbitMq;
+using Microsoft.Extensions.Logging.Abstractions;
 
 namespace PulseFlow.IntegrationTests.Ingestion.Messaging;
 
@@ -14,7 +15,8 @@ public sealed class RabbitMqConnectionManagerTests
             new RabbitMqOptions
             {
                 QueueName = "pulseflow.connection-manager-test"
-            });
+            },
+            NullLogger<RabbitMqConnectionManager>.Instance);
         await manager.DisposeAsync();
 
         // Act

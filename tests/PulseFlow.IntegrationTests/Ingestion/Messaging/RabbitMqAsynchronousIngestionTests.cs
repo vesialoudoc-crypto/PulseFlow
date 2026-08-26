@@ -297,7 +297,10 @@ public sealed class RabbitMqAsynchronousIngestionTests :
                 throw new InvalidOperationException("The test store failed the batch.");
             }
 
-            return new EfCoreEventChunkStore(_dbContext).StoreAsync(events, cancellationToken);
+            return new EfCoreEventChunkStore(
+                _dbContext,
+                Microsoft.Extensions.Options.Options.Create(new PostgreSqlOptions()))
+                .StoreAsync(events, cancellationToken);
         }
     }
 

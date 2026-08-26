@@ -6,10 +6,13 @@ namespace PulseFlow.Api.Http;
 
 public static class PulseFlowHttpApplicationExtensions
 {
-    public static IServiceCollection AddPulseFlowHttpApplication(this IServiceCollection services)
+    public static IServiceCollection AddPulseFlowHttpApplication(
+        this IServiceCollection services,
+        IConfiguration configuration
+    )
     {
         services.AddControllers();
-        services.AddPulseFlowHealthChecks();
+        services.AddPulseFlowHealthChecks(configuration);
         services.AddProblemDetails();
         services.AddExceptionHandler<GlobalExceptionHandler>();
         services.AddOpenApi(options =>

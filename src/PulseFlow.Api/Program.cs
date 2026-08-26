@@ -1,4 +1,5 @@
 using Microsoft.Extensions.Options;
+using PulseFlow.Api.Health;
 using PulseFlow.Api.Http;
 using PulseFlow.Api.Ingestion;
 using PulseFlow.Api.Ingestion.Messaging;
@@ -18,19 +19,20 @@ if (connectionString is null)
     throw new InvalidOperationException("Connection string 'PulseFlow' is required.");
 }
 
-builder.Services.AddPulseFlowHttpApplication();
-builder.Services.AddStartupInitialization();
+var readinessTimeout = HealthCheckExtensions.GetReadinessTimeout(builder.Configuration);
+builder.Services.AddPulseFlowHttpApplication(builder.Configuration);
+builder.Services.AddStartupInitialization(builder.Configuration);
 
 builder.Services.AddIngestionOptions(builder.Configuration);
 
-builder.Services.AddPulseFlowPersistence(connectionString);
+builder.Services.AddPulseFlowPersistence(connectionString, builder.Configuration, readinessTimeout);
 
 builder.Services.AddSingleton<NdjsonRecordReader>();
 builder.Services.AddSingleton<EventEnvelopeValidator>();
 
 builder.Services.AddScoped<IEventChunkStore, EfCoreEventChunkStore>();
-builder.Services.AddIngestionMessaging(builder.Configuration);
-builder.Services.AddIngestionRateLimiting(builder.Configuration);
+builder.Services.AddIngestionMessaging(builder.Configuration, readinessTimeout);
+builder.Services.AddIngestionRateLimiting(builder.Configuration, readinessTimeout);
 
 builder.Services.AddScoped<IngestEventsHandler>(services =>
 {

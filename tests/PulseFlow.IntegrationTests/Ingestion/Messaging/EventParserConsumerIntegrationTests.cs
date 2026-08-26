@@ -3,6 +3,7 @@ using System.Text.Json;
 using Microsoft.EntityFrameworkCore;
 using Microsoft.Extensions.DependencyInjection;
 using Microsoft.Extensions.Logging.Abstractions;
+using Microsoft.Extensions.Options;
 using PulseFlow.Api.Ingestion;
 using PulseFlow.Api.Ingestion.Messaging;
 using PulseFlow.Api.Ingestion.Ndjson;
@@ -77,6 +78,7 @@ public sealed class EventParserConsumerIntegrationTests : IClassFixture<PostgreS
         services.AddDbContext<PulseFlowDbContext>(options => options.UseNpgsql(_fixture.ConnectionString));
         services.AddSingleton<NdjsonRecordReader>();
         services.AddSingleton<EventEnvelopeValidator>();
+        services.AddSingleton<IOptions<PostgreSqlOptions>>(Options.Create(new PostgreSqlOptions()));
         services.AddScoped<IEventChunkStore, EfCoreEventChunkStore>();
         services.AddScoped<IngestEventsHandler>(serviceProvider => new IngestEventsHandler(
             serviceProvider.GetRequiredService<EventEnvelopeValidator>(),

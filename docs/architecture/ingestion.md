@@ -218,14 +218,16 @@ policies is not automated in this project slice.
 The manager creates the publisher and consumer channels and disposes the connection
 after its dependent messaging resources have stopped.
 
-The singleton `RabbitMqIngestionBatchPublisher` owns a publisher-confirmation-enabled
-channel. It serializes access with `SemaphoreSlim`, sets persistent
-`application/x-ndjson` message properties, and publishes the exact raw body to the
-configured queue through RabbitMQ's default exchange. The RabbitMQ client's automatic
-recovery remains at its default enabled setting; this cleanup adds no custom retry or
-reconnection behavior. A failed publication still faults the publisher task and reaches
-the HTTP exception boundary. This is the local, minimum Step 2 topology and lifecycle
-choice rather than a final topology or delivery guarantee.
+The singleton `RabbitMqIngestionBatchPublisher` owns a fixed pool of
+publisher-confirmation-enabled slots equal to `PublisherChannelCount`. A slot is leased
+exclusively for one publish and contains either a usable channel or an empty state. It
+sets persistent `application/x-ndjson` message properties and publishes the exact raw
+body to the configured queue through RabbitMQ's default exchange. The RabbitMQ
+client's automatic recovery remains at its default enabled setting; this cleanup adds
+no custom retry or reconnection behavior. A failed publication still faults the
+publisher task and reaches the HTTP exception boundary. This is the local, minimum
+Step 2 topology and lifecycle choice rather than a final topology or delivery
+guarantee.
 
 HTTP `202 Accepted` with no body is returned only after that publisher task completes
 successfully. Consequently, it means RabbitMQ confirmed publication of the raw batch,
@@ -233,6 +235,17 @@ not that any record was parsed, validated, or persisted. Unsupported media types
 return HTTP 415, oversized batches return HTTP 413 Problem Details, and publisher and
 other unhandled failures continue to use the existing centralized HTTP 500 Problem
 Details boundary, with no `202` response.
+
+RabbitMQ.Client uses configured provider-native connection, handshake, and continuation
+timeouts. RabbitMQ validates every timeout as positive and no greater than
+`Int32.MaxValue` milliseconds before startup; this is the safe maximum for the
+timer-based deadlines used by RabbitMQ.Client and `CancelAfter`. Publisher-slot wait
+and channel creation share the component-owned `PublisherChannelTimeout`, while
+publish/confirmation uses the separate `PublishConfirmationTimeout`. A publish timeout,
+caller cancellation, or publish failure disposes the uncertain channel and returns its
+now-empty slot to the pool. The next request can create a bounded replacement in that
+slot for its own batch only; it never retries the prior batch. When all slots are empty,
+RabbitMQ readiness is unhealthy even if the shared broker connection remains open.
 
 The implemented dependency graph and lifetimes are:
 
@@ -417,6 +430,15 @@ counter. It returns the decision and remaining TTL. The limiter maps an allowed 
 an exceeded result with `RetryAfter`, or an unavailable result when the Redis operation
 fails. There is no retry, lock, cache, or local fallback counter.
 
+Redis configures provider-native `ConnectTimeout` and `AsyncTimeout`. In
+StackExchange.Redis 3.1.13, `AsyncTimeout` completes an overdue asynchronous command
+with `RedisTimeoutException`, so the rate-limit script and startup `PING` use
+`WaitAsync` only for caller cancellation. That local cancellation wait does not
+guarantee physical cancellation of a script already sent to Redis. A provider timeout
+is classified as an unavailable limiter result, so
+`EventsController` returns HTTP 503 and does not read the request body or call the
+RabbitMQ publisher.
+
 `EventsController` uses `IIngestionRateLimiter` before reading the request body or
 publishing the batch to RabbitMQ. An exceeded result returns HTTP 429 with a
 `Retry-After` header rounded up to whole delta seconds. An unavailable result returns
@@ -457,6 +479,17 @@ The one-time startup operations are:
   `BasicConsume` subscription per configured worker. Their completed subscriptions are
   an explicit readiness participant, so performance traffic does not race registration.
 
+Timeout ownership follows component boundaries. `PostgreSql` configures Npgsql
+connection and command timeouts, which are also applied to the direct persistence
+command. `RabbitMq` configures RabbitMQ.Client connection, handshake, and continuation
+timeouts plus local topology, publisher-channel, and publish deadlines. `Redis`
+configures StackExchange.Redis connection and async operation timeouts. `Startup`
+owns one linked timeout token for the complete startup sequence, and `HealthChecks`
+sets the built-in timeout on every application readiness registration. All values are
+positive and startup-validated. The currently configured initial values and consequences
+are accepted in
+[ADR 0020](../decisions/0020-use-explicit-dependency-timeout-budgets.md).
+
 The endpoints have deliberately different meanings:
 
 ```text
@@ -474,6 +507,11 @@ and reads the existing RabbitMQ connection's open state. It does not create Rabb
 connections or channels, declare topology, publish, run migrations, load the rate-limit
 Lua resource, or rerun any startup initializer. A post-start dependency failure returns
 HTTP 503 from readiness while the startup state remains `Ready`.
+
+Every application readiness registration has the configured readiness timeout.
+PostgreSQL passes the health-check token to `CanConnectAsync`; Redis uses that token to
+bound its `PING` wait. Consequently, a dependency that does not complete cannot keep a
+readiness probe waiting beyond its configured budget.
 
 The performance runner uses readiness as the pre-measurement boundary before it starts
 samplers or k6. In Single, it polls the API's public `/health/ready` endpoint. In
