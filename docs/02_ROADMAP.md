@@ -420,37 +420,41 @@ other environment-specific configuration at runtime. It is intended to be reused
 unchanged by local and future staging/cloud deployment environments; no staging or
 cloud infrastructure is defined by this publication step.
 
-The first staging architecture is now accepted: Render is the disposable staging
-platform, while AWS remains the final cloud target. Render staging will consume an
-immutable GHCR SHA-tagged API image, use Render-owned public HTTPS ingress, managed
-PostgreSQL, Redis-compatible Key Value storage, and a separate persistent RabbitMQ
-service over private normal application connectivity. HAProxy remains local-only.
-`/health/ready` is the staging traffic-readiness endpoint. The detailed topology,
-operator-access boundary, persistence lifecycle, migration invariant, and current
-API/consumer coupling are recorded in
-[First Staging Environment Architecture](architecture/staging-environment.md) and
-[ADR 0018](decisions/0018-use-render-for-first-disposable-staging-environment.md).
+Render was accepted historically as a disposable staging experiment and has a complete
+but unapplied Terraform definition in [`infra/render/`](../infra/render/). It was
+later rejected as the actual deployment target because its complete required topology
+could not meet the intended free/cheap boundary. No Render account bootstrap,
+credentials, state, plan, apply, or resources were created. The Terraform remains
+intact as a historical portability reference and must not be extended or deleted in
+the AWS work. ADR 0018 is superseded; its historical record and the Render migration
+bundle decision remain useful context.
 
-The first declarative Render staging definition is in
-[`infra/render/`](../infra/render/). It uses the official Render Terraform provider,
-with normal Terraform/OpenTofu-compatible HCL, and represents the public API,
-managed PostgreSQL, managed Key Value, private RabbitMQ, its persistent disk, runtime
-configuration, `/health/ready`, immutable image selection, and pre-deploy migration
-bundle command. Terraform was selected over a Render Blueprint because later IaC
-work must extend beyond Render into the AWS stage; there is no Blueprint second
-source of truth. The migration bundle lives in the same immutable API image and runs
-once in Render pre-deploy with the runtime PostgreSQL connection string. See
-[ADR 0019](decisions/0019-run-render-migrations-from-an-immutable-api-image.md).
+The AWS/Azure portability audit selected AWS for the first real cloud deployment. The
+accepted target is an Application Load Balancer, ECS Fargate API tasks, RDS PostgreSQL,
+ElastiCache Serverless for Valkey, and Amazon MQ for RabbitMQ. The API continues to
+consume the existing immutable GHCR SHA-tagged image and `/health/ready` remains the
+traffic-readiness endpoint. The same image runs its migration bundle exactly once in a
+controlled ECS Fargate task before the API service update. AWS does not require ECR
+for this path: ECS can authenticate to GHCR through a Secret Manager-backed registry
+credential. The intentionally cheap first staging proposal avoids a NAT Gateway by
+allowing public-IP Fargate tasks whose security group accepts HTTP only from the ALB;
+PostgreSQL, Valkey, and RabbitMQ remain private. This is a staging boundary, not a
+production-networking claim.
 
-No Render resource, credential, remote state backend, deployment automation, or
-first `plan`/`apply` has been created. The immediate next step is a controlled Render
-account bootstrap and review of the first Terraform plan.
+Azure remains the later portability proof. Azure Container Apps, PostgreSQL Flexible
+Server, Azure Managed Redis, and a Container Apps migration job fit the application,
+but Azure has no first-party managed RabbitMQ equivalent. Self-hosting RabbitMQ is a
+separate later operating-model decision and is not included in the first AWS slice.
+See [Cloud Portability Audit](architecture/cloud-portability-audit.md) and
+[ADR 0020](decisions/0020-use-aws-for-first-cloud-deployment.md).
 
 ### Do Not Decide in Advance
 
-Specific AWS services, final AWS network topology, final release strategy, and API and
-RabbitMQ-consumer decoupling remain undecided. The first Render staging topology is
-accepted but does not decide those final-cloud concerns.
+The first AWS service mapping and staging networking boundary are accepted in ADR 0020.
+Exact AWS region, task and broker sizing, RDS/Valkey configuration, protected remote
+state design, authenticated image-credential bootstrap, release automation, and the
+final production network topology remain undecided. API and RabbitMQ-consumer
+decoupling also remains deferred.
 
 ## Stage 6: Production Hardening
 
