@@ -1,0 +1,10 @@
+# Copy this file outside the repository or to a non-committed *.tfvars file.
+# Never place real AWS, GHCR, database, or RabbitMQ credentials in Git.
+
+aws_profile = "pulseflow-staging"
+
+pulseflow_image = "ghcr.io/<repository-owner>/pulseflow-api:sha-<40-lowercase-hex-characters>"
+
+# Create this secret outside Terraform before the first plan. It contains only:
+# {"username":"<github-user>","password":"<package-read-token>"}
+ghcr_registry_credentials_secret_arn = "arn:aws:secretsmanager:eu-central-1:<account-id>:secret:pulseflow-staging/bootstrap/ghcr-<suffix>"
