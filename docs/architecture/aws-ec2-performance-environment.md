@@ -1,11 +1,9 @@
 # AWS EC2 Performance Environment
 
 **Status:** Accepted low-cost Terraform configuration. The failed partial environment
-from the first real apply has not yet been fully removed because the active principal
-lacks `ec2:TerminateInstances` for its sole Redis instance. No replacement plan has
-been created and this is not an end-to-end proof; see
-[checkpoint 076](../progress/2026-08-27-076-correct-low-cost-ec2-topology-and-blocked-cleanup.md)
-for the exact remaining state and required administrator action.
+was removed in [checkpoint 077](../progress/2026-08-27-077-destroy-old-ec2-performance-environment.md).
+A fresh 48 GiB saved plan exists for the one-time proof, but no apply, runtime
+deployment, or end-to-end proof has occurred.
 
 ## Purpose
 
@@ -21,7 +19,8 @@ leaving the Amazon MQ managed-service cost running between experiments. It is no
 or a production topology.
 
 ADR 0022 records the original EC2 decision; [ADR 0023](../decisions/0023-prioritize-low-cost-ec2-performance-proof.md)
-supersedes its instance-sizing rationale to prioritize short-lived AWS cost.
+supersedes its instance-sizing rationale to prioritize short-lived AWS cost; [ADR 0024](../decisions/0024-minimize-one-time-ec2-proof-storage.md)
+records the final one-time proof storage and scheduling correction.
 
 ## Topology
 
@@ -131,10 +130,11 @@ Redis have Docker named volumes on their own node root filesystems; no extra EBS
 or managed data service is created. The data survives stop/start but is deleted when
 Terraform terminates the instance.
 
-The accepted root-only allocation is 16 GiB for app, 16 GiB for RabbitMQ, 8 GiB for
-Redis, 32 GiB for PostgreSQL, and 8 GiB for load generation: 80 GiB total. These are
-bounded short-proof allocations for Amazon Linux, Docker layers, and limited service
-state, not evidence of production storage capacity.
+The accepted root-only allocation is 8 GiB for app, 8 GiB for RabbitMQ, 8 GiB for
+Redis, 16 GiB for PostgreSQL, and 8 GiB for load generation: 48 GiB total. Every
+size is at least the selected Amazon Linux 2023 AMI snapshot's 8 GiB minimum. These
+are bounded short-proof allocations with no production storage headroom and are not
+evidence of production storage capacity.
 
 EventBridge Scheduler starts and stops all five nodes Monday through Friday at 08:00
 and 17:00 with the `Europe/Warsaw` IANA timezone. Its timezone-aware schedule handles
@@ -145,7 +145,10 @@ Manager secrets still incur charges.
 The Terraform definition remains because the schedule is correct for this environment,
 but the active principal was denied both Scheduler group creation during the first
 apply and `scheduler:ListScheduleGroups` during later inspection. Scheduler is not a
-precondition for reviewing the replacement topology.
+precondition for reviewing the replacement topology. The current one-time proof sets
+the existing `enable_business_hours_schedule` input to `false`, omitting Scheduler
+resources and relying on the explicit manual stop immediately after validation. The
+default remains enabled for a later recurring environment.
 
 ## Deliberate limitations
 

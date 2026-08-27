@@ -1,11 +1,10 @@
 # EC2 Performance Environment
 
 **Status:** Accepted low-cost Terraform configuration. The failed first apply did not
-reach bootstrap or runtime deployment. Its sole Redis node remains running because the
-operator lacks `ec2:TerminateInstances`, so the partial environment is not clean and
-no replacement plan has been created. This is not an end-to-end proof; see the latest
-[checkpoint 076](../../docs/progress/2026-08-27-076-correct-low-cost-ec2-topology-and-blocked-cleanup.md)
-for the required administrator intervention.
+reach bootstrap or runtime deployment, and its partial environment was removed in
+[checkpoint 077](../../docs/progress/2026-08-27-077-destroy-old-ec2-performance-environment.md).
+A fresh 48 GiB saved plan exists for the one-time proof. This is not an end-to-end
+proof: no apply or runtime deployment has occurred.
 
 This Terraform root is a second AWS environment, separate from the successful
 managed-service proof in [`../aws/`](../aws/). The managed proof remains historical
@@ -16,7 +15,9 @@ replace it.
 The accepted architecture is described in
 [AWS EC2 Performance Environment](../../docs/architecture/aws-ec2-performance-environment.md)
 and [ADR 0023](../../docs/decisions/0023-prioritize-low-cost-ec2-performance-proof.md).
-ADR 0022 remains the historical record of the original EC2 decision.
+[ADR 0024](../../docs/decisions/0024-minimize-one-time-ec2-proof-storage.md) records
+the final one-time proof storage and scheduling correction. ADR 0022 remains the
+historical record of the original EC2 decision.
 
 ## Topology
 
@@ -43,10 +44,10 @@ different addresses and operator access.
 
 | Role | Instance type | Root gp3 disk | Reason |
 | --- | --- | ---: | --- |
-| `app` | `c7i-flex.large` (2 vCPU, 4 GiB) | 16 GiB | Runs HAProxy and two API containers for a short cloud deployment proof. |
-| `rabbitmq` | `t3.small` (2 vCPU, 2 GiB) | 16 GiB | Holds bounded broker state without sizing for long cloud benchmarks. |
+| `app` | `c7i-flex.large` (2 vCPU, 4 GiB) | 8 GiB | Runs HAProxy and two API containers for a short cloud deployment proof. |
+| `rabbitmq` | `t3.small` (2 vCPU, 2 GiB) | 8 GiB | Holds bounded broker state without sizing for long cloud benchmarks. |
 | `redis` | `t3.small` (2 vCPU, 2 GiB) | 8 GiB | Redis holds only distributed rate-limit state. |
-| `postgres` | `t3.small` (2 vCPU, 2 GiB) | 32 GiB | Leaves a bounded allowance for PostgreSQL data and WAL. |
+| `postgres` | `t3.small` (2 vCPU, 2 GiB) | 16 GiB | Holds the minimum short-proof PostgreSQL data and WAL allowance. |
 | `loadgen` | `t3.small` (2 vCPU, 2 GiB) | 8 GiB | Runs the short k6 smoke or controlled load scenario. |
 
 This topology prioritizes AWS cost over clean long-duration benchmark inputs.
@@ -56,7 +57,9 @@ without launching an instance; an actual `c7i-flex.large` launch remains unprove
 until a future reviewed apply. The four support nodes use `t3.small`; their CPU-credit
 behavior is acceptable for short cloud proofs. Long sustained performance experiments
 belong to the local/home environment. This is not a capacity claim.
-The allocation is 80 GiB of gp3 roots in total.
+The allocation is 48 GiB of gp3 roots in total. Every root size is at least the
+selected Amazon Linux 2023 AMI snapshot's 8 GiB minimum; it deliberately adds no
+production storage headroom.
 Every root disk is encrypted gp3 and is the only EBS disk for its node. Terraform
 terminates it with the instance; stopping an instance preserves it. Docker named
 volumes on the host root filesystem persist PostgreSQL, RabbitMQ, and Redis data.
@@ -150,6 +153,13 @@ Terraform `-Apply` waits for bootstrapping and then stops the new nodes delibera
 This avoids an out-of-hours apply becoming an unattended compute charge. Scheduling
 will restart only containers that have already been deployed; it does not turn a
 freshly provisioned host into an implicit release.
+
+For the current one-time deployment proof, set the existing
+`enable_business_hours_schedule` input to `false` when creating the saved plan. This
+omits the Scheduler group and schedules because the active principal cannot create
+them and the lifecycle is manually stopped immediately after validation. The default
+remains `true` so the Terraform design retains the accepted Scheduler support for a
+later recurring environment.
 
 If an apply fails before Terraform can return all five node IDs, its emergency-stop
 path discovers only active instances with the exact `Project=PulseFlow`,

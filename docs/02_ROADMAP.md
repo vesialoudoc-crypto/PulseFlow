@@ -493,11 +493,15 @@ A second, separate AWS Terraform root defines a temporary EC2 performance enviro
 in [`infra/aws-ec2-performance/`](../infra/aws-ec2-performance/). It does not replace
 or rewrite the managed proof. The accepted low-cost topology is one `c7i-flex.large`
 app node with HAProxy and two API containers, plus `t3.small` RabbitMQ, Redis,
-PostgreSQL, and k6 nodes. It has 80 GiB of encrypted root-only gp3 storage in total.
+PostgreSQL, and k6 nodes. It has 48 GiB of encrypted root-only gp3 storage in total,
+with every volume at or above the selected AL2023 snapshot's 8 GiB minimum and no
+production storage headroom.
 All runtime components remain Dockerized and use fixed private IPv4 service addresses.
 It uses SSM rather than a public operator path, no NAT, no ALB, no Elastic IP, and no
 managed runtime service. EventBridge Scheduler remains defined for weekday 08:00–17:00
-`Europe/Warsaw` operation, but Scheduler authorization is not a topology blocker.
+`Europe/Warsaw` operation, but the current one-time proof disables it through
+`enable_business_hours_schedule` because the principal cannot create Scheduler
+resources and the nodes will be manually stopped immediately after validation.
 
 The previous `m7i.large` sizing over-optimized benchmark isolation and did not respect
 the primary AWS cost constraint. AWS is for short real-cloud proofs; sustained
@@ -519,12 +523,15 @@ tagged EC2 instances, EBS volumes, VPC/network resources, security groups, runti
 secrets, or named IAM roles and instance profiles remain. The shared GHCR bootstrap
 secret remains intentionally reusable. The active principal lacks Scheduler read
 permissions, so Scheduler absence could not be independently queried; the failed
-apply never created Scheduler resources and Terraform state had none. No replacement
-Terraform plan has been created. The next active technical objective is to create and
-review a fresh low-cost saved plan, without applying it until explicitly approved.
-See [checkpoint 077](progress/2026-08-27-077-destroy-old-ec2-performance-environment.md)
-for the exact cleanup and verification record. Do not resume local bottleneck tuning
-on the shared Docker Desktop topology.
+apply never created Scheduler resources and Terraform state had none. A fresh
+38-resource saved plan now uses 48 GiB of encrypted root-only gp3 storage and disables
+the Scheduler group and schedules for the one-time proof through
+`enable_business_hours_schedule = false`. The Terraform design retains Scheduler
+support for a later recurring environment. No apply has occurred; review the saved
+plan and current prices before approving it. See
+[checkpoint 078](progress/2026-08-27-078-minimize-one-time-ec2-proof-plan.md) and
+[ADR 0024](decisions/0024-minimize-one-time-ec2-proof-storage.md). Do not resume
+local bottleneck tuning on the shared Docker Desktop topology.
 
 Azure remains the later portability proof. Azure Container Apps, PostgreSQL Flexible
 Server, Azure Managed Redis, and a Container Apps migration job fit the application,
