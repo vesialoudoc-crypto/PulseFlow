@@ -512,18 +512,19 @@ Performance Environment](architecture/aws-ec2-performance-environment.md),
 [ADR 0022](decisions/0022-use-ec2-for-temporary-aws-performance-environment.md), and
 [ADR 0023](decisions/0023-prioritize-low-cost-ec2-performance-proof.md).
 
-Cleanup of the failed environment is currently blocked. Terraform's reviewed destroy
-plan began removing supporting resources, but an EC2 termination dry-run proved the
-active principal lacks `ec2:TerminateInstances` for the sole running Redis node. The
-remaining state still contains that node, its root volume, VPC/network resources,
-runtime secrets, and non-Scheduler IAM resources. No new Terraform plan has been
-created against this partial state. The next active technical objective is for an
-administrator to grant or perform the exact termination, then rerun Terraform destroy,
-independently verify that the environment and state are empty, and only then create and
-review a fresh low-cost saved plan. See
-[checkpoint 076](progress/2026-08-27-076-correct-low-cost-ec2-topology-and-blocked-cleanup.md)
-for the exact retained-state inventory. Do not resume local bottleneck tuning on the
-shared Docker Desktop topology.
+The old failed environment has been cleaned up. After an administrator manually
+terminated the sole Redis instance, Terraform destroyed the remaining 25 Terraform-managed
+resources and its state became empty. Independent AWS CLI checks confirmed no active
+tagged EC2 instances, EBS volumes, VPC/network resources, security groups, runtime
+secrets, or named IAM roles and instance profiles remain. The shared GHCR bootstrap
+secret remains intentionally reusable. The active principal lacks Scheduler read
+permissions, so Scheduler absence could not be independently queried; the failed
+apply never created Scheduler resources and Terraform state had none. No replacement
+Terraform plan has been created. The next active technical objective is to create and
+review a fresh low-cost saved plan, without applying it until explicitly approved.
+See [checkpoint 077](progress/2026-08-27-077-destroy-old-ec2-performance-environment.md)
+for the exact cleanup and verification record. Do not resume local bottleneck tuning
+on the shared Docker Desktop topology.
 
 Azure remains the later portability proof. Azure Container Apps, PostgreSQL Flexible
 Server, Azure Managed Redis, and a Container Apps migration job fit the application,
