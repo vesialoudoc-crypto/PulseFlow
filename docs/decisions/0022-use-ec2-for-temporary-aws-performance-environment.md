@@ -4,11 +4,11 @@
 
 ## Status
 
-Superseded in part by [ADR 0023](0023-prioritize-low-cost-ec2-performance-proof.md).
+Superseded by [ADR 0025](0025-separate-ec2-provisioning-from-runtime-operations.md).
 
-ADR 0023 replaces the instance sizing and its benchmark-isolation rationale. This ADR
-remains the historical record of the original five-node EC2 decision, network
-boundary, root-only storage, SSM operator path, and timezone-aware scheduler.
+This ADR remains the historical record of the original coupled five-node EC2 decision.
+ADR 0023 replaced its sizing rationale, and ADR 0025 retired the coupled provisioning,
+runtime, and scheduling boundary.
 
 ## Context
 

@@ -1,5 +1,0 @@
-services:
-  k6:
-    image: grafana/k6:0.57.0
-    volumes:
-      - ./scripts:/scripts:ro

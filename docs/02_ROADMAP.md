@@ -364,7 +364,7 @@ implement deployment, then investigate and optimize a measured deployed constrai
 
 ## Stage 5: Deployment to AWS
 
-**Status:** In progress (first disposable AWS lifecycle proven; next: deployed observability and performance measurement)
+**Status:** In progress (managed AWS lifecycle proven; EC2 provisioning foundation created; next: explicit EC2 operations and runtime deployment)
 
 ### Goals
 
@@ -489,49 +489,29 @@ and database name from `rds describe-db-instances` and retains the credential se
 only for username and password. This is a correction within the accepted architecture,
 not a change to its resource mapping or lifecycle sequence.
 
-A second, separate AWS Terraform root defines a temporary EC2 performance environment
-in [`infra/aws-ec2-performance/`](../infra/aws-ec2-performance/). It does not replace
-or rewrite the managed proof. The accepted low-cost topology is one `c7i-flex.large`
-app node with HAProxy and two API containers, plus `t3.small` RabbitMQ, Redis,
-PostgreSQL, and k6 nodes. It has 48 GiB of encrypted root-only gp3 storage in total,
-with every volume at or above the selected AL2023 snapshot's 8 GiB minimum and no
-production storage headroom.
-All runtime components remain Dockerized and use fixed private IPv4 service addresses.
-It uses SSM rather than a public operator path, no NAT, no ALB, no Elastic IP, and no
-managed runtime service. EventBridge Scheduler remains defined for weekday 08:00–17:00
-`Europe/Warsaw` operation, but the current one-time proof disables it through
-`enable_business_hours_schedule` because the principal cannot create Scheduler
-resources and the nodes will be manually stopped immediately after validation.
+A second, separate AWS Terraform root now provides only a minimal EC2 provisioning
+layer in [`infra/aws-ec2-low-performance/`](../infra/aws-ec2-low-performance/). It
+does not replace or rewrite the managed proof. Terraform would create one VPC, one
+public subnet, minimal SSM IAM, exact security-group paths, and four clean Amazon
+Linux 2023 x86_64 hosts: app, RabbitMQ, Redis, and PostgreSQL. Each defaults to
+`t3.small` with an 8-GiB encrypted gp3 root disk. There is no load-generator EC2;
+future k6 traffic originates externally.
 
-The previous `m7i.large` sizing over-optimized benchmark isolation and did not respect
-the primary AWS cost constraint. AWS is for short real-cloud proofs; sustained
-performance experiments belong to the local/home environment. The lifecycle script now
-uses exact environment-tag discovery as an emergency stop fallback when an apply fails
-before its full node-output map exists. The original failed attempt remains recorded
-unchanged in checkpoint 075; its four rejected `m7i.large` launches and its missing
-runtime proof are historical facts. The x86_64/requested `c7i-flex.large` shape was
-inspected and EC2 `RunInstances` dry-run returned `DryRunOperation`; no actual
-`c7i-flex.large` launch is proven until a future reviewed apply. See [AWS EC2
-Performance Environment](architecture/aws-ec2-performance-environment.md),
-[ADR 0022](decisions/0022-use-ec2-for-temporary-aws-performance-environment.md), and
-[ADR 0023](decisions/0023-prioritize-low-cost-ec2-performance-proof.md).
+The former coupled EC2 implementation was retired after its AWS resources had already
+been manually removed and its local Terraform state discarded. Its lifecycle script,
+runtime bootstrap, scheduler, runtime secrets, image handling, load generator, and
+deployment automation are no longer live repository behavior. Historical checkpoints
+and ADRs preserve that history. The new boundary is Terraform provisioning → clean
+hosts → explicit SSM/Linux operations → future Docker/runtime deployment. Terraform
+does not use user data or install Docker, configure services, create secrets, pull
+images, run migrations or tests, or start/stop/deploy EC2 hosts. See [AWS EC2
+Low-Performance Environment](architecture/aws-ec2-low-performance-environment.md)
+and [ADR 0025](decisions/0025-separate-ec2-provisioning-from-runtime-operations.md).
 
-The old failed environment has been cleaned up. After an administrator manually
-terminated the sole Redis instance, Terraform destroyed the remaining 25 Terraform-managed
-resources and its state became empty. Independent AWS CLI checks confirmed no active
-tagged EC2 instances, EBS volumes, VPC/network resources, security groups, runtime
-secrets, or named IAM roles and instance profiles remain. The shared GHCR bootstrap
-secret remains intentionally reusable. The active principal lacks Scheduler read
-permissions, so Scheduler absence could not be independently queried; the failed
-apply never created Scheduler resources and Terraform state had none. A fresh
-38-resource saved plan now uses 48 GiB of encrypted root-only gp3 storage and disables
-the Scheduler group and schedules for the one-time proof through
-`enable_business_hours_schedule = false`. The Terraform design retains Scheduler
-support for a later recurring environment. No apply has occurred; review the saved
-plan and current prices before approving it. See
-[checkpoint 078](progress/2026-08-27-078-minimize-one-time-ec2-proof-plan.md) and
-[ADR 0024](decisions/0024-minimize-one-time-ec2-proof-storage.md). Do not resume
-local bottleneck tuning on the shared Docker Desktop topology.
+No new EC2 infrastructure has been created by this repository refactor. Actual apply,
+Linux/Docker configuration, runtime topology, migrations, smoke validation, and
+external performance traffic remain future work. Do not resume local bottleneck tuning
+on the shared Docker Desktop topology.
 
 Azure remains the later portability proof. Azure Container Apps, PostgreSQL Flexible
 Server, Azure Managed Redis, and a Container Apps migration job fit the application,
