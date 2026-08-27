@@ -1,0 +1,16 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+readonly readiness_url="http://${app_private_ip}/health/ready"
+readonly deadline_epoch="$((SECONDS + 180))"
+
+until curl --fail --silent --show-error --max-time 2 "$readiness_url" >/dev/null; do
+  if (( SECONDS >= deadline_epoch )); then
+    echo "PulseFlow readiness did not return HTTP 200 within three minutes: $readiness_url" >&2
+    exit 1
+  fi
+
+  sleep 2
+done
+
+echo "PulseFlow readiness returned HTTP 200."
