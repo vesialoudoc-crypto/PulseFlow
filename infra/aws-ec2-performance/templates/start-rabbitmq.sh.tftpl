@@ -1,0 +1,18 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+cd /opt/pulseflow
+umask 077
+
+rabbitmq_secret="$(aws secretsmanager get-secret-value --region '${aws_region}' --secret-id '${rabbitmq_secret_arn}' --query SecretString --output text)"
+rabbitmq_username="$(jq --raw-output '.username' <<<"$rabbitmq_secret")"
+rabbitmq_password="$(jq --raw-output '.password' <<<"$rabbitmq_secret")"
+
+cat > .env <<EOF
+RABBITMQ_USERNAME=$rabbitmq_username
+RABBITMQ_PASSWORD=$rabbitmq_password
+EOF
+chmod 0600 .env
+
+docker compose pull
+docker compose up -d --wait

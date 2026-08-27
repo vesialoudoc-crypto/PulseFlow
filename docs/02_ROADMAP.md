@@ -489,10 +489,28 @@ and database name from `rds describe-db-instances` and retains the credential se
 only for username and password. This is a correction within the accepted architecture,
 not a change to its resource mapping or lifecycle sequence.
 
+A second, separate AWS Terraform root now defines a temporary EC2 performance
+environment in [`infra/aws-ec2-performance/`](../infra/aws-ec2-performance/). It does
+not replace or rewrite the managed proof. The accepted topology is one app
+`m7i.large` with HAProxy and two API containers, isolated `m7i.large` RabbitMQ and
+PostgreSQL nodes, one `t3.small` Redis node, and one `m7i.large` k6
+node. All runtime components remain Dockerized and use fixed private IPv4 service
+addresses. It uses root disks only, SSM rather than a public operator path, no NAT,
+no ALB, no Elastic IP, and no managed runtime service. EventBridge Scheduler starts
+and stops all nodes on weekdays from 08:00 to 17:00 in the `Europe/Warsaw` timezone.
+The corresponding lifecycle script makes bootstrapping, migration-first deployment,
+readiness, k6 exact-row smoke proof, baseline triggering, stopping, and destruction
+explicit. A non-applying plan with an explicit AMI override has verified the
+configuration without `ssm:GetParameter`; a real operator plan with its selected
+image and GHCR credential still requires review before any apply. See [AWS EC2
+Performance Environment](architecture/aws-ec2-performance-environment.md)
+and [ADR 0022](decisions/0022-use-ec2-for-temporary-aws-performance-environment.md).
+
 The next active technical objective is deployed observability and performance
-measurement: run a short controlled AWS load test, identify one measured bottleneck,
-and make one justified before/after optimization. Do not resume local bottleneck
-tuning on the shared Docker Desktop topology.
+measurement: make a reviewed EC2 performance plan, run a short controlled AWS load
+test in the approved environment, identify one measured bottleneck, and make one
+justified before/after optimization. Do not resume local bottleneck tuning on the
+shared Docker Desktop topology.
 
 Azure remains the later portability proof. Azure Container Apps, PostgreSQL Flexible
 Server, Azure Managed Redis, and a Container Apps migration job fit the application,
@@ -503,13 +521,15 @@ See [Cloud Portability Audit](architecture/cloud-portability-audit.md) and
 
 ### Do Not Decide in Advance
 
-The first AWS service mapping, staging networking boundary, selected first-plan
+The first AWS managed-service mapping, staging networking boundary, selected first-plan
 region/sizes, local-state boundary, GHCR bootstrap boundary, and manual migration-first
-release mechanism are accepted in ADRs 0020 and 0021. Automatic deployment/CI/CD,
-deployed observability and performance measurement, a measured bottleneck and
-justified before/after optimization, production networking/HA, restricted RabbitMQ
-user management, and the final production topology remain unresolved. API and
-RabbitMQ-consumer decoupling also remains deferred.
+release mechanism are accepted in ADRs 0020 and 0021. The separate EC2 temporary
+performance topology, its root-disk-only storage, SSM operator path, and timezone-aware
+start/stop schedule are accepted in ADR 0022. Automatic deployment/CI/CD, a real EC2
+plan/apply proof, deployed observability and performance measurement, a measured
+bottleneck and justified before/after optimization, production networking/HA,
+restricted RabbitMQ user management, and the final production topology remain
+unresolved. API and RabbitMQ-consumer decoupling also remains deferred.
 
 ## Stage 6: Production Hardening
 

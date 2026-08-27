@@ -1,0 +1,55 @@
+x-api: &api
+  image: ${pulseflow_image}
+  restart: unless-stopped
+  environment:
+    ASPNETCORE_URLS: http://+:8080
+    ConnectionStrings__PulseFlow: Host=$${POSTGRES_PRIVATE_IP};Port=5432;Database=pulseflow;Username=$${POSTGRES_USERNAME};Password=$${POSTGRES_PASSWORD}
+    ConnectionStrings__RabbitMq: amqp://$${RABBITMQ_USERNAME}:$${RABBITMQ_PASSWORD}@$${RABBITMQ_PRIVATE_IP}:5672/
+    ConnectionStrings__Redis: $${REDIS_PRIVATE_IP}:6379,abortConnect=false
+    HealthChecks__Timeout: "00:00:02"
+    Ingestion__ChunkCapacity: "100"
+    Ingestion__MaxBatchBytes: "10485760"
+    IngestionRateLimit__RequestLimit: "10000000"
+    IngestionRateLimit__WindowDuration: "00:01:00"
+    PostgreSql__CommandTimeout: "00:00:10"
+    PostgreSql__ConnectionTimeout: "00:00:10"
+    RabbitMq__CleanupTimeout: "00:00:01"
+    RabbitMq__ConnectionTimeout: "00:00:10"
+    RabbitMq__ConsumerCount: "1"
+    RabbitMq__ContinuationTimeout: "00:00:10"
+    RabbitMq__HandshakeTimeout: "00:00:10"
+    RabbitMq__PublisherChannelCount: "4"
+    RabbitMq__PublisherChannelTimeout: "00:00:05"
+    RabbitMq__PublishConfirmationTimeout: "00:00:05"
+    RabbitMq__QueueName: pulseflow.ingestion-batches
+    RabbitMq__TopologyDeclarationTimeout: "00:00:10"
+    Redis__AsyncTimeout: "00:00:01"
+    Redis__ConnectTimeout: "00:00:10"
+    Startup__InitializationTimeout: "00:00:30"
+
+services:
+  haproxy:
+    image: haproxy:3.2.9-alpine
+    restart: unless-stopped
+    depends_on:
+      - api-1
+      - api-2
+    ports:
+      - "80:8080"
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro
+
+  api-1:
+    <<: *api
+
+  api-2:
+    <<: *api
+
+  migrations:
+    image: ${pulseflow_image}
+    restart: "no"
+    entrypoint:
+      - /app/migrations/pulseflow-migrations
+    command:
+      - --connection
+      - Host=$${POSTGRES_PRIVATE_IP};Port=5432;Database=pulseflow;Username=$${POSTGRES_USERNAME};Password=$${POSTGRES_PASSWORD}
