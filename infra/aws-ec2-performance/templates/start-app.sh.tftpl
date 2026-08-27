@@ -34,3 +34,29 @@ docker logout ghcr.io
 # either replica from being started with a pending schema change.
 docker compose run --rm --no-deps migrations
 docker compose up -d api-1 api-2 haproxy
+
+readonly deadline_epoch="$((SECONDS + 180))"
+
+for service in api-1 api-2 haproxy; do
+  until docker compose ps --status running --services | grep --quiet --fixed-strings --line-regexp "$service"; do
+    if (( SECONDS >= deadline_epoch )); then
+      echo "PulseFlow service '$service' did not reach the running state within three minutes." >&2
+      exit 1
+    fi
+
+    sleep 2
+  done
+done
+
+for service in api-1 api-2; do
+  until docker compose exec -T haproxy sh -c "wget -q -T 2 -O /dev/null http://$service:8080/health/ready"; do
+    if (( SECONDS >= deadline_epoch )); then
+      echo "PulseFlow API replica '$service' did not return readiness HTTP 200 through HAProxy's network within three minutes." >&2
+      exit 1
+    fi
+
+    sleep 2
+  done
+done
+
+echo "Both PulseFlow API replicas are running and ready for HAProxy health checks."

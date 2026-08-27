@@ -13,7 +13,7 @@ param(
     [int]$VirtualUsers = 10,
     [Parameter(ParameterSetName = "Stop")]
     [switch]$Stop,
-    [Parameter(ParameterSetName = "Destroy")]
+    [Parameter(ParameterSetName = "Destroy", Mandatory)]
     [switch]$Destroy,
     [Parameter(ParameterSetName = "Destroy")]
     [switch]$DeleteBootstrapSecret
@@ -23,6 +23,7 @@ Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
 . (Join-Path $PSScriptRoot "Import-PulseFlowDotEnv.ps1")
+. (Join-Path $PSScriptRoot "Get-PulseFlowActiveTaggedEc2InstanceIds.ps1")
 . (Join-Path $PSScriptRoot "Resolve-PulseFlowExecutable.ps1")
 
 # This secret already bootstraps the proven managed AWS environment. It contains only
@@ -32,6 +33,7 @@ $script:ghcrBootstrapSecretName = "pulseflow-staging/bootstrap/ghcr"
 $script:requiredSavedPlanTerraformVersion = "1.15.8"
 $script:effectiveAwsProfile = $AwsProfile
 $script:plannedAwsAccountId = $null
+$script:plannedAwsRegion = $null
 
 function Get-RequiredEnvironmentVariable {
     param(
@@ -186,9 +188,15 @@ function Set-ApplyCredentialContextFromSavedPlan {
     }
 
     $terraformExecutable = (Resolve-PulseFlowTerraformExecutable -PreferredVersion $script:requiredSavedPlanTerraformVersion).Path
-    $savedPlanJson = & $terraformExecutable show -json $planPath
-    if ($LASTEXITCODE -ne 0) {
-        throw "terraform show -json failed for saved plan '$planPath'."
+    Push-Location $TerraformDirectory
+    try {
+        $savedPlanJson = & $terraformExecutable show -json $planPath
+        if ($LASTEXITCODE -ne 0) {
+            throw "terraform show -json failed for saved plan '$planPath'."
+        }
+    }
+    finally {
+        Pop-Location
     }
 
     $savedPlan = ($savedPlanJson | Out-String) | ConvertFrom-Json
@@ -196,9 +204,15 @@ function Set-ApplyCredentialContextFromSavedPlan {
     $plannedProfile = if ($null -eq $plannedProfileVariable) { $null } else { $plannedProfileVariable.Value.value }
     $plannedAccountOutput = $savedPlan.planned_values.outputs.PSObject.Properties["aws_account_id"]
     $plannedAccountId = if ($null -eq $plannedAccountOutput) { $null } else { $plannedAccountOutput.Value.value }
+    $plannedRegionOutput = $savedPlan.planned_values.outputs.PSObject.Properties["aws_region"]
+    $plannedRegion = if ($null -eq $plannedRegionOutput) { $null } else { $plannedRegionOutput.Value.value }
 
     if ([string]::IsNullOrWhiteSpace([string]$plannedAccountId)) {
         throw "Saved plan '$planPath' does not contain the planned AWS account ID. Create a complete plan before -Apply."
+    }
+
+    if ([string]::IsNullOrWhiteSpace([string]$plannedRegion)) {
+        throw "Saved plan '$planPath' does not contain the planned AWS region. Create a complete plan before -Apply."
     }
 
     if ([string]::IsNullOrWhiteSpace([string]$plannedProfile)) {
@@ -218,12 +232,14 @@ function Set-ApplyCredentialContextFromSavedPlan {
     }
 
     $script:plannedAwsAccountId = [string]$plannedAccountId
+    $script:plannedAwsRegion = [string]$plannedRegion
 }
 
 function Assert-TerraformStateAccountMatchesCurrent {
     Push-Location $TerraformDirectory
     try {
         $stateAccountId = Invoke-TerraformOutput -Name "aws_account_id"
+        $stateRegion = Invoke-TerraformOutput -Name "aws_region"
     }
     finally {
         Pop-Location
@@ -235,6 +251,14 @@ function Assert-TerraformStateAccountMatchesCurrent {
 
     if ($stateAccountId -cne $script:awsAccountId) {
         throw "Terraform state targets AWS account '$stateAccountId', but the active AWS CLI/Terraform credential context resolves to '$script:awsAccountId'."
+    }
+
+    if ([string]::IsNullOrWhiteSpace($stateRegion)) {
+        throw "Terraform state does not contain aws_region. Refuse to run this lifecycle command without a state region guard."
+    }
+
+    if ($stateRegion -cne $script:awsRegion) {
+        throw "Terraform state targets AWS region '$stateRegion', but AWS_REGION resolves to '$script:awsRegion'."
     }
 }
 
@@ -400,6 +424,21 @@ function Get-NodeIds {
     }
 
     return $nodeIds
+}
+
+function Get-ExistingEnvironmentNodeIds {
+    $instancesJson = Invoke-Aws -Arguments @(
+        "ec2",
+        "describe-instances",
+        "--filters",
+        "Name=tag:Project,Values=PulseFlow",
+        "Name=tag:Environment,Values=performance",
+        "Name=tag:ManagedBy,Values=Terraform",
+        "--output",
+        "json"
+    )
+
+    return @(Get-PulseFlowActiveTaggedEc2InstanceIds -DescribeInstancesJson $instancesJson)
 }
 
 function Invoke-SsmShellCommand {
@@ -577,17 +616,69 @@ function Stop-Nodes {
     )
 
     $instanceIds = @($NodeIds.app, $NodeIds.rabbitmq, $NodeIds.redis, $NodeIds.postgres, $NodeIds.loadgen)
-    $instancesJson = Invoke-Aws -Arguments (@("ec2", "describe-instances", "--instance-ids") + $instanceIds + @("--output", "json"))
-    $instances = (($instancesJson | ConvertFrom-Json).Reservations | ForEach-Object { $_.Instances })
-    $runningInstanceIds = @($instances | Where-Object { $_.State.Name -eq "running" } | ForEach-Object { $_.InstanceId })
+    Stop-InstanceIds -InstanceIds $instanceIds
+}
 
-    if ($runningInstanceIds.Count -eq 0) {
-        Write-Host "All EC2 performance nodes are already stopped."
+function Stop-ExistingEnvironmentNodes {
+    $instanceIds = Get-ExistingEnvironmentNodeIds
+    if ($instanceIds.Count -eq 0) {
+        Write-Warning "No active EC2 instances matched the exact PulseFlow performance Terraform tags after apply/bootstrap failure."
         return
     }
 
-    Invoke-Aws -Arguments (@("ec2", "stop-instances", "--instance-ids") + $runningInstanceIds) | Out-Null
-    Invoke-Aws -Arguments (@("ec2", "wait", "instance-stopped", "--instance-ids") + $runningInstanceIds) | Out-Null
+    Write-Warning "Terraform node outputs were unavailable or incomplete. Attempting to stop $($instanceIds.Count) EC2 instance(s) discovered by the exact PulseFlow performance Terraform tags."
+    Stop-InstanceIds -InstanceIds $instanceIds
+}
+
+function Stop-InstanceIds {
+    param(
+        [Parameter(Mandatory)]
+        [string[]]$InstanceIds
+    )
+
+    if ($InstanceIds.Count -eq 0) {
+        return
+    }
+
+    $deadline = [DateTime]::UtcNow.AddMinutes(15)
+
+    while ([DateTime]::UtcNow -lt $deadline) {
+        $instancesJson = Invoke-Aws -Arguments (@("ec2", "describe-instances", "--instance-ids") + $instanceIds + @("--output", "json"))
+        $instances = @(($instancesJson | ConvertFrom-Json).Reservations | ForEach-Object { $_.Instances })
+
+        if ($instances.Count -ne $InstanceIds.Count) {
+            throw "Expected $($InstanceIds.Count) EC2 performance nodes while stopping, but AWS returned $($instances.Count)."
+        }
+
+        $nonStoppedInstances = @($instances | Where-Object { $_.State.Name -ne "stopped" })
+        if ($nonStoppedInstances.Count -eq 0) {
+            Write-Host "All EC2 performance nodes are stopped."
+            return
+        }
+
+        $runningInstanceIds = @($nonStoppedInstances | Where-Object { $_.State.Name -eq "running" } | ForEach-Object { $_.InstanceId })
+        if ($runningInstanceIds.Count -ne 0) {
+            Invoke-Aws -Arguments (@("ec2", "stop-instances", "--instance-ids") + $runningInstanceIds) | Out-Null
+            continue
+        }
+
+        $pendingInstanceIds = @($nonStoppedInstances | Where-Object { $_.State.Name -eq "pending" } | ForEach-Object { $_.InstanceId })
+        if ($pendingInstanceIds.Count -ne 0) {
+            Invoke-Aws -Arguments (@("ec2", "wait", "instance-running", "--instance-ids") + $pendingInstanceIds) | Out-Null
+            continue
+        }
+
+        $stoppingInstanceIds = @($nonStoppedInstances | Where-Object { $_.State.Name -eq "stopping" } | ForEach-Object { $_.InstanceId })
+        if ($stoppingInstanceIds.Count -ne 0) {
+            Invoke-Aws -Arguments (@("ec2", "wait", "instance-stopped", "--instance-ids") + $stoppingInstanceIds) | Out-Null
+            continue
+        }
+
+        $stateSummary = $nonStoppedInstances | ForEach-Object { "$($_.InstanceId)=$($_.State.Name)" }
+        throw "Cannot stop EC2 performance nodes in unexpected states: $($stateSummary -join ', ')."
+    }
+
+    throw "Timed out while waiting for the requested EC2 performance nodes to stop."
 }
 
 function Initialize-OperatorPrerequisites {
@@ -598,6 +689,13 @@ function Initialize-OperatorPrerequisites {
     $awsDefaultRegion = Get-RequiredEnvironmentVariable -Name "AWS_DEFAULT_REGION"
     if ($awsDefaultRegion -ne $script:awsRegion) {
         throw "AWS_DEFAULT_REGION must equal AWS_REGION for this lifecycle."
+    }
+
+    if (
+        -not [string]::IsNullOrWhiteSpace($script:plannedAwsRegion) `
+        -and $script:awsRegion -cne $script:plannedAwsRegion
+    ) {
+        throw "Saved plan targets AWS region '$($script:plannedAwsRegion)', but AWS_REGION resolves to '$script:awsRegion'."
     }
 
     $script:terraformExecutable = (Resolve-PulseFlowTerraformExecutable -PreferredVersion $script:requiredSavedPlanTerraformVersion).Path
@@ -684,6 +782,8 @@ function Invoke-Apply {
         throw "Saved plan '$planPath' was not found. Run this script without a lifecycle switch, review the plan, then run -Apply."
     }
 
+    $nodeIds = $null
+
     Push-Location $TerraformDirectory
     try {
         & $script:terraformExecutable apply $planPath
@@ -695,6 +795,22 @@ function Invoke-Apply {
         Wait-ForNodesBootstrap -NodeIds $nodeIds
         Stop-Nodes -NodeIds $nodeIds
     }
+    catch {
+        Write-Warning "Apply or bootstrap failed. Attempting an emergency stop before rethrowing the failure."
+        try {
+            if ($null -ne $nodeIds) {
+                Stop-Nodes -NodeIds $nodeIds
+            }
+            else {
+                Stop-ExistingEnvironmentNodes
+            }
+        }
+        catch {
+            Write-Warning "Automatic EC2 stop after apply/bootstrap failure also failed: $($_.Exception.Message)"
+        }
+
+        throw
+    }
     finally {
         Pop-Location
     }
@@ -703,6 +819,8 @@ function Invoke-Apply {
 }
 
 function Invoke-Deploy {
+    $nodeIds = $null
+
     Push-Location $TerraformDirectory
     try {
         $nodeIds = Get-NodeIds
@@ -718,6 +836,21 @@ function Invoke-Deploy {
         Invoke-SsmShellCommand -InstanceId $nodeIds.loadgen -Command "/opt/pulseflow/run-smoke.sh $smokeEventId"
         Invoke-SsmShellCommand -InstanceId $nodeIds.postgres -Command "/opt/pulseflow/wait-for-smoke-event.sh $smokeEventId"
         Invoke-SsmShellCommand -InstanceId $nodeIds.postgres -Command "/opt/pulseflow/cleanup-smoke-event.sh $smokeEventId"
+
+        Write-Host "EC2 smoke event '$smokeEventId' was accepted, persisted, and removed."
+    }
+    catch {
+        if ($null -ne $nodeIds) {
+            Write-Warning "Deployment proof failed. Attempting to stop all EC2 performance nodes before rethrowing the failure."
+            try {
+                Stop-Nodes -NodeIds $nodeIds
+            }
+            catch {
+                Write-Warning "Automatic EC2 stop after deployment failure also failed: $($_.Exception.Message)"
+            }
+        }
+
+        throw
     }
     finally {
         Pop-Location

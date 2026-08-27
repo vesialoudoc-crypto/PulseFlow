@@ -4,7 +4,11 @@
 
 ## Status
 
-Accepted
+Superseded in part by [ADR 0023](0023-prioritize-low-cost-ec2-performance-proof.md).
+
+ADR 0023 replaces the instance sizing and its benchmark-isolation rationale. This ADR
+remains the historical record of the original five-node EC2 decision, network
+boundary, root-only storage, SSM operator path, and timezone-aware scheduler.
 
 ## Context
 

@@ -76,7 +76,7 @@ locals {
       instance_type        = var.app_instance_type
       instance_profile     = aws_iam_instance_profile.app_node.name
       private_ip           = local.node_private_ips.app
-      root_volume_size_gib = 24
+      root_volume_size_gib = 16
       security_group_id    = aws_security_group.app.id
       user_data            = local.app_user_data
     }
@@ -84,7 +84,7 @@ locals {
       instance_type        = var.rabbitmq_instance_type
       instance_profile     = aws_iam_instance_profile.rabbitmq_node.name
       private_ip           = local.node_private_ips.rabbitmq
-      root_volume_size_gib = 24
+      root_volume_size_gib = 16
       security_group_id    = aws_security_group.rabbitmq.id
       user_data            = local.rabbitmq_user_data
     }
@@ -92,7 +92,7 @@ locals {
       instance_type        = var.redis_instance_type
       instance_profile     = aws_iam_instance_profile.standard_node.name
       private_ip           = local.node_private_ips.redis
-      root_volume_size_gib = 12
+      root_volume_size_gib = 8
       security_group_id    = aws_security_group.redis.id
       user_data            = local.redis_user_data
     }
@@ -100,7 +100,7 @@ locals {
       instance_type        = var.postgres_instance_type
       instance_profile     = aws_iam_instance_profile.postgres_node.name
       private_ip           = local.node_private_ips.postgres
-      root_volume_size_gib = 48
+      root_volume_size_gib = 32
       security_group_id    = aws_security_group.postgres.id
       user_data            = local.postgres_user_data
     }
@@ -108,7 +108,7 @@ locals {
       instance_type        = var.loadgen_instance_type
       instance_profile     = aws_iam_instance_profile.standard_node.name
       private_ip           = local.node_private_ips.loadgen
-      root_volume_size_gib = 16
+      root_volume_size_gib = 8
       security_group_id    = aws_security_group.loadgen.id
       user_data            = local.loadgen_user_data
     }

@@ -83,21 +83,21 @@ variable "docker_compose_version" {
 }
 
 variable "app_instance_type" {
-  description = "EC2 type for HAProxy and two API containers. The ordinary M-family type provides a stable CPU baseline without Flex-performance scaling."
+  description = "EC2 type for HAProxy and two API containers. The cost-sensitive default provides 2 vCPUs and 4 GiB on x86_64."
   type        = string
-  default     = "m7i.large"
+  default     = "c7i-flex.large"
 }
 
 variable "rabbitmq_instance_type" {
-  description = "EC2 type for the isolated RabbitMQ node. The ordinary M-family type avoids Flex-performance scaling during broker measurements."
+  description = "EC2 type for the isolated RabbitMQ node in a short cloud proof."
   type        = string
-  default     = "m7i.large"
+  default     = "t3.small"
 }
 
 variable "postgres_instance_type" {
-  description = "EC2 type for the isolated PostgreSQL node. The ordinary M-family type avoids Flex-performance scaling during database measurements."
+  description = "EC2 type for the isolated PostgreSQL node in a short cloud proof."
   type        = string
-  default     = "m7i.large"
+  default     = "t3.small"
 }
 
 variable "redis_instance_type" {
@@ -107,9 +107,9 @@ variable "redis_instance_type" {
 }
 
 variable "loadgen_instance_type" {
-  description = "EC2 type for the isolated k6 node. The ordinary M-family type avoids Flex-performance scaling in generated-load measurements."
+  description = "EC2 type for the isolated k6 node in a short cloud proof."
   type        = string
-  default     = "m7i.large"
+  default     = "t3.small"
 }
 
 variable "enable_business_hours_schedule" {
