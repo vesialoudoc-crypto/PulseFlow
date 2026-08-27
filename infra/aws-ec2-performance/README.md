@@ -1,7 +1,11 @@
 # EC2 Performance Environment
 
-**Status:** Accepted Terraform configuration. It has not been applied to an AWS
-account from this repository state.
+**Status:** Accepted low-cost Terraform configuration. The failed first apply did not
+reach bootstrap or runtime deployment. Its sole Redis node remains running because the
+operator lacks `ec2:TerminateInstances`, so the partial environment is not clean and
+no replacement plan has been created. This is not an end-to-end proof; see the latest
+[checkpoint 076](../../docs/progress/2026-08-27-076-correct-low-cost-ec2-topology-and-blocked-cleanup.md)
+for the required administrator intervention.
 
 This Terraform root is a second AWS environment, separate from the successful
 managed-service proof in [`../aws/`](../aws/). The managed proof remains historical
@@ -11,21 +15,22 @@ replace it.
 
 The accepted architecture is described in
 [AWS EC2 Performance Environment](../../docs/architecture/aws-ec2-performance-environment.md)
-and [ADR 0022](../../docs/decisions/0022-use-ec2-for-temporary-aws-performance-environment.md).
+and [ADR 0023](../../docs/decisions/0023-prioritize-low-cost-ec2-performance-proof.md).
+ADR 0022 remains the historical record of the original EC2 decision.
 
 ## Topology
 
 ```text
-EC2 app (m7i.large)
+EC2 app (c7i-flex.large)
 ├─ HAProxy :80
 ├─ PulseFlow.Api #1
 └─ PulseFlow.Api #2
         │ private IPv4 only
-        ├── EC2 rabbitmq (m7i.large) ─ RabbitMQ :5672
+        ├── EC2 rabbitmq (t3.small) ─ RabbitMQ :5672
         ├── EC2 redis (t3.small) ─ Redis :6379
-        └── EC2 postgres (m7i.large) ─ PostgreSQL :5432
+        └── EC2 postgres (t3.small) ─ PostgreSQL :5432
 
-EC2 loadgen (m7i.large) ─ k6 ──private HTTP──> EC2 app :80
+EC2 loadgen (t3.small) ─ k6 ──private HTTP──> EC2 app :80
 ```
 
 All runtime services are Docker containers. The nodes use the same x86_64 immutable
@@ -38,18 +43,20 @@ different addresses and operator access.
 
 | Role | Instance type | Root gp3 disk | Reason |
 | --- | --- | ---: | --- |
-| `app` | `m7i.large` (2 vCPU, 8 GiB) | 24 GiB | Measures HAProxy and both colocated API replicas on a fixed-performance M-family type. |
-| `rabbitmq` | `m7i.large` (2 vCPU, 8 GiB) | 24 GiB | Separates broker CPU, RAM, and disk behavior from the application node. |
-| `redis` | `t3.small` (2 vCPU, 2 GiB) | 12 GiB | Redis holds only the current distributed rate-limit state; this cost-focused starting size is deliberately smaller. |
-| `postgres` | `m7i.large` (2 vCPU, 8 GiB) | 48 GiB | Leaves room for PostgreSQL data, WAL, image layers, and a bounded experiment. |
-| `loadgen` | `m7i.large` (2 vCPU, 8 GiB) | 16 GiB | Keeps k6 CPU and RAM outside the application measurement. |
+| `app` | `c7i-flex.large` (2 vCPU, 4 GiB) | 16 GiB | Runs HAProxy and two API containers for a short cloud deployment proof. |
+| `rabbitmq` | `t3.small` (2 vCPU, 2 GiB) | 16 GiB | Holds bounded broker state without sizing for long cloud benchmarks. |
+| `redis` | `t3.small` (2 vCPU, 2 GiB) | 8 GiB | Redis holds only distributed rate-limit state. |
+| `postgres` | `t3.small` (2 vCPU, 2 GiB) | 32 GiB | Leaves a bounded allowance for PostgreSQL data and WAL. |
+| `loadgen` | `t3.small` (2 vCPU, 2 GiB) | 8 GiB | Runs the short k6 smoke or controlled load scenario. |
 
-`m7i.large` is chosen for the API, broker, database, and load generator as the
-ordinary fixed-performance M-family type. It avoids T-family CPU credits and the
-Flex CPU-performance scaling of `m7i-flex`, keeping those four experiment inputs
-stable. Redis deliberately remains the low-cost `t3.small` exception because it holds
-only rate-limit state. This is a starting measurement configuration, not a capacity
-claim.
+This topology prioritizes AWS cost over clean long-duration benchmark inputs.
+The x86_64 architecture and requested `c7i-flex.large` shape were inspected, and an
+EC2 `RunInstances` dry-run returned `DryRunOperation`. That result checks the request
+without launching an instance; an actual `c7i-flex.large` launch remains unproven
+until a future reviewed apply. The four support nodes use `t3.small`; their CPU-credit
+behavior is acceptable for short cloud proofs. Long sustained performance experiments
+belong to the local/home environment. This is not a capacity claim.
+The allocation is 80 GiB of gp3 roots in total.
 Every root disk is encrypted gp3 and is the only EBS disk for its node. Terraform
 terminates it with the instance; stopping an instance preserves it. Docker named
 volumes on the host root filesystem persist PostgreSQL, RabbitMQ, and Redis data.
@@ -144,6 +151,11 @@ This avoids an out-of-hours apply becoming an unattended compute charge. Schedul
 will restart only containers that have already been deployed; it does not turn a
 freshly provisioned host into an implicit release.
 
+If an apply fails before Terraform can return all five node IDs, its emergency-stop
+path discovers only active instances with the exact `Project=PulseFlow`,
+`Environment=performance`, and `ManagedBy=Terraform` tags, then attempts to stop
+those discovered IDs. It never performs an account-wide stop.
+
 ## Lifecycle
 
 Copy [`.env.example`](../../.env.example) to the repository-root `.env` and provide
@@ -225,7 +237,7 @@ topology will be recreated with the existing credential.
 Recheck current Frankfurt prices in the AWS Pricing Calculator before every plan. The
 main recurring categories are:
 
-- running EC2 instance-hours (four `m7i.large` nodes and one `t3.small` node);
+- running EC2 instance-hours (one `c7i-flex.large` node and four `t3.small` nodes);
 - gp3 root-volume GiB-month charges, which continue while nodes are stopped;
 - auto-assigned public IPv4 hours while nodes are running;
 - Secrets Manager storage for the shared GHCR secret and two runtime credential

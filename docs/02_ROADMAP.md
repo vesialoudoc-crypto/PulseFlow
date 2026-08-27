@@ -489,27 +489,40 @@ and database name from `rds describe-db-instances` and retains the credential se
 only for username and password. This is a correction within the accepted architecture,
 not a change to its resource mapping or lifecycle sequence.
 
-A second, separate AWS Terraform root now defines a temporary EC2 performance
-environment in [`infra/aws-ec2-performance/`](../infra/aws-ec2-performance/). It does
-not replace or rewrite the managed proof. The accepted topology is one app
-`m7i.large` with HAProxy and two API containers, isolated `m7i.large` RabbitMQ and
-PostgreSQL nodes, one `t3.small` Redis node, and one `m7i.large` k6
-node. All runtime components remain Dockerized and use fixed private IPv4 service
-addresses. It uses root disks only, SSM rather than a public operator path, no NAT,
-no ALB, no Elastic IP, and no managed runtime service. EventBridge Scheduler starts
-and stops all nodes on weekdays from 08:00 to 17:00 in the `Europe/Warsaw` timezone.
-The corresponding lifecycle script makes bootstrapping, migration-first deployment,
-readiness, k6 exact-row smoke proof, baseline triggering, stopping, and destruction
-explicit. A non-applying plan with an explicit AMI override has verified the
-configuration without `ssm:GetParameter`; a real operator plan with its selected
-image and GHCR credential still requires review before any apply. See [AWS EC2
-Performance Environment](architecture/aws-ec2-performance-environment.md)
-and [ADR 0022](decisions/0022-use-ec2-for-temporary-aws-performance-environment.md).
+A second, separate AWS Terraform root defines a temporary EC2 performance environment
+in [`infra/aws-ec2-performance/`](../infra/aws-ec2-performance/). It does not replace
+or rewrite the managed proof. The accepted low-cost topology is one `c7i-flex.large`
+app node with HAProxy and two API containers, plus `t3.small` RabbitMQ, Redis,
+PostgreSQL, and k6 nodes. It has 80 GiB of encrypted root-only gp3 storage in total.
+All runtime components remain Dockerized and use fixed private IPv4 service addresses.
+It uses SSM rather than a public operator path, no NAT, no ALB, no Elastic IP, and no
+managed runtime service. EventBridge Scheduler remains defined for weekday 08:00–17:00
+`Europe/Warsaw` operation, but Scheduler authorization is not a topology blocker.
 
-The next active technical objective is deployed observability and performance
-measurement: make a reviewed EC2 performance plan, run a short controlled AWS load
-test in the approved environment, identify one measured bottleneck, and make one
-justified before/after optimization. Do not resume local bottleneck tuning on the
+The previous `m7i.large` sizing over-optimized benchmark isolation and did not respect
+the primary AWS cost constraint. AWS is for short real-cloud proofs; sustained
+performance experiments belong to the local/home environment. The lifecycle script now
+uses exact environment-tag discovery as an emergency stop fallback when an apply fails
+before its full node-output map exists. The original failed attempt remains recorded
+unchanged in checkpoint 075; its four rejected `m7i.large` launches and its missing
+runtime proof are historical facts. The x86_64/requested `c7i-flex.large` shape was
+inspected and EC2 `RunInstances` dry-run returned `DryRunOperation`; no actual
+`c7i-flex.large` launch is proven until a future reviewed apply. See [AWS EC2
+Performance Environment](architecture/aws-ec2-performance-environment.md),
+[ADR 0022](decisions/0022-use-ec2-for-temporary-aws-performance-environment.md), and
+[ADR 0023](decisions/0023-prioritize-low-cost-ec2-performance-proof.md).
+
+Cleanup of the failed environment is currently blocked. Terraform's reviewed destroy
+plan began removing supporting resources, but an EC2 termination dry-run proved the
+active principal lacks `ec2:TerminateInstances` for the sole running Redis node. The
+remaining state still contains that node, its root volume, VPC/network resources,
+runtime secrets, and non-Scheduler IAM resources. No new Terraform plan has been
+created against this partial state. The next active technical objective is for an
+administrator to grant or perform the exact termination, then rerun Terraform destroy,
+independently verify that the environment and state are empty, and only then create and
+review a fresh low-cost saved plan. See
+[checkpoint 076](progress/2026-08-27-076-correct-low-cost-ec2-topology-and-blocked-cleanup.md)
+for the exact retained-state inventory. Do not resume local bottleneck tuning on the
 shared Docker Desktop topology.
 
 Azure remains the later portability proof. Azure Container Apps, PostgreSQL Flexible
@@ -525,7 +538,7 @@ The first AWS managed-service mapping, staging networking boundary, selected fir
 region/sizes, local-state boundary, GHCR bootstrap boundary, and manual migration-first
 release mechanism are accepted in ADRs 0020 and 0021. The separate EC2 temporary
 performance topology, its root-disk-only storage, SSM operator path, and timezone-aware
-start/stop schedule are accepted in ADR 0022. Automatic deployment/CI/CD, a real EC2
+start/stop schedule are accepted in ADRs 0022 and 0023. Automatic deployment/CI/CD, a real EC2
 plan/apply proof, deployed observability and performance measurement, a measured
 bottleneck and justified before/after optimization, production networking/HA,
 restricted RabbitMQ user management, and the final production topology remain

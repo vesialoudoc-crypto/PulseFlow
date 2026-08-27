@@ -20,7 +20,14 @@ chmod 0644 /opt/pulseflow/docker-compose.yml
 %{ for file_name, file_content in helper_files ~}
 install -d -m 0755 "$(dirname "/opt/pulseflow/${file_name}")"
 echo '${file_content}' | base64 --decode > "/opt/pulseflow/${file_name}"
-chmod 0700 "/opt/pulseflow/${file_name}"
+case "${file_name}" in
+  haproxy.cfg|scripts/*.js)
+    chmod 0644 "/opt/pulseflow/${file_name}"
+    ;;
+  *)
+    chmod 0700 "/opt/pulseflow/${file_name}"
+    ;;
+esac
 %{ endfor ~}
 
 touch /opt/pulseflow/.bootstrap-complete
