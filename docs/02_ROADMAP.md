@@ -441,7 +441,10 @@ allowing public-IP Fargate tasks whose security group accepts HTTP only from the
 PostgreSQL, Valkey, and RabbitMQ remain private. This is a staging boundary, not a
 production-networking claim.
 
-The first AWS Terraform definition exists in [`infra/aws/`](../infra/aws/). It is
+The first managed AWS Terraform definition is preserved in
+[`infra/aws/managed-legacy/`](../infra/aws/managed-legacy/). It is legacy historical
+infrastructure, not the active AWS deployment path, and must not be applied as the
+current environment. It is
 locally formatted and validated with Terraform 1.15.9, AWS provider 6.61.0, and Random
 provider 3.9.0. Its accepted first-plan configuration is Frankfurt (`eu-central-1`),
 a no-NAT VPC, ALB, one
@@ -458,8 +461,8 @@ and a documented paid-resource checkpoint. See
 
 The repository-root ignored `.env` is now the documented local bootstrap source for
 AWS credentials, region, the GHCR package-read credential, and the immutable image.
-The staging lifecycle is explicit: the default
-`pwsh ./scripts/deploy-aws-staging.ps1` bootstraps the external GHCR secret without
+The legacy managed-staging lifecycle used
+`pwsh ./scripts/deploy-aws-managed-legacy.ps1` to bootstrap the external GHCR secret without
 putting the token in Terraform, verifies the image, and saves a plan; after plan/cost
 review and approval, `-Apply` applies exactly that saved plan and stops with the ECS
 service at desired count zero; `-Deploy` separately runs migration, rollout, and the
@@ -490,7 +493,7 @@ only for username and password. This is a correction within the accepted archite
 not a change to its resource mapping or lifecycle sequence.
 
 A second, separate AWS Terraform root now provides only a minimal EC2 provisioning
-layer in [`infra/aws-ec2-low-performance/`](../infra/aws-ec2-low-performance/). It
+layer in [`infra/aws/ec2/`](../infra/aws/ec2/). It
 does not replace or rewrite the managed proof. Terraform would create one VPC, one
 public subnet, minimal SSM IAM, exact security-group paths, and four clean Amazon
 Linux 2023 x86_64 hosts: app, RabbitMQ, Redis, and PostgreSQL. Each defaults to
@@ -505,7 +508,7 @@ and ADRs preserve that history. The new boundary is Terraform provisioning → c
 hosts → explicit SSM/Linux operations → future Docker/runtime deployment. Terraform
 does not use user data or install Docker, configure services, create secrets, pull
 images, run migrations or tests, or start/stop/deploy EC2 hosts. See [AWS EC2
-Low-Performance Environment](architecture/aws-ec2-low-performance-environment.md)
+Environment](architecture/aws-ec2-environment.md)
 and [ADR 0025](decisions/0025-separate-ec2-provisioning-from-runtime-operations.md).
 
 No new EC2 infrastructure has been created by this repository refactor. Actual apply,

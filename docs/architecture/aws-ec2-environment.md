@@ -1,9 +1,9 @@
-# AWS EC2 Low-Performance Environment
+# AWS EC2 Environment
 
 **Status:** Accepted provisioning and operations boundary. No new AWS infrastructure
 has been created by this change.
 
-The managed AWS proof in [`infra/aws/`](../../infra/aws/) remains separate historical
+The managed AWS proof in [`infra/aws/managed-legacy/`](../../infra/aws/managed-legacy/) remains separate historical
 evidence and is not changed here. This document describes the replacement for the
 retired coupled EC2 implementation; its decision is recorded in
 [ADR 0025](../decisions/0025-separate-ec2-provisioning-from-runtime-operations.md).
@@ -18,12 +18,12 @@ Terraform
   -> Docker and runtime deployment (deferred)
 ```
 
-[`infra/aws-ec2-low-performance/`](../../infra/aws-ec2-low-performance/) owns only
+[`infra/aws/ec2/`](../../infra/aws/ec2/) owns only
 the first two lines. It has no user data and does not install Docker, configure
 runtime services, manage credentials, pull images, run migrations, test readiness,
 schedule instance lifecycle, or orchestrate deployment.
 
-[`infra/ops/aws-ec2-low-performance/`](../../infra/ops/aws-ec2-low-performance/)
+[`infra/aws/ec2/ops/`](../../infra/aws/ec2/ops/)
 contains the small, explicit operations foundation. Terraform never invokes it.
 
 ## Provisioned infrastructure

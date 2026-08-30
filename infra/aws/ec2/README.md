@@ -1,7 +1,7 @@
-# AWS EC2 Low-Performance Provisioning
+# AWS EC2 Provisioning
 
 This root creates a deliberately small, disposable EC2 infrastructure layer. It is
-separate from the established managed AWS proof in [`../aws/`](../aws/), which this
+separate from the established managed AWS proof in [`../managed-legacy/`](../managed-legacy/), which this
 directory does not modify.
 
 Terraform creates only a dedicated VPC, one public subnet with Internet egress,
@@ -22,7 +22,7 @@ secrets, SSH ingress, user-data, Docker installation, or deployment automation.
 Terraform provisioning ends when the four clean hosts are available through AWS
 Systems Manager Session Manager. It never invokes the operations layer.
 
-[`../../ops/aws-ec2-low-performance/`](../../ops/aws-ec2-low-performance/) contains
+[`ops/`](ops/) contains
 the explicit SSM connection helper and a standalone Docker installation script for
 already-created hosts. Runtime deployment is intentionally deferred.
 
@@ -47,9 +47,9 @@ Supply the required HTTP source CIDR and explicitly selected Amazon Linux 2023 x
 AMI ID through a local, uncommitted variable file or command-line variables, then run:
 
 ```powershell
-terraform -chdir=infra/aws-ec2-low-performance init -backend=false
-terraform -chdir=infra/aws-ec2-low-performance fmt -check
-terraform -chdir=infra/aws-ec2-low-performance validate
+terraform -chdir=infra/aws/ec2 init -backend=false
+terraform -chdir=infra/aws/ec2 fmt -check
+terraform -chdir=infra/aws/ec2 validate
 ```
 
 This root does not resolve an AMI through AWS Systems Manager Parameter Store and does

@@ -1,6 +1,19 @@
+#PulseFlow/
+#  .env
+#  scripts/
+#    aws/
+#      EnvFileLoader.ps1
+
 Set-StrictMode -Version Latest
 
-function Import-PulseFlowDotEnv {
+$repoRoot = Split-Path (Split-Path $PSScriptRoot -Parent) -Parent
+$envFilePath = Join-Path $repoRoot ".env"
+
+if (-not (Test-Path -LiteralPath $envFilePath -PathType Leaf)) {
+    throw ".env file was not found: $envFilePath"
+}
+
+function EnvFileLoader {
     [CmdletBinding()]
     param(
         [Parameter(Mandatory)]
@@ -39,3 +52,5 @@ function Import-PulseFlowDotEnv {
         [Environment]::SetEnvironmentVariable($name, $value, [System.EnvironmentVariableTarget]::Process)
     }
 }
+
+EnvFileLoader -Path $envFilePath

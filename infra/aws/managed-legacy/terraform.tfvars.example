@@ -1,5 +1,5 @@
 # Normal local staging planning uses the repository-root .env and
-# scripts/deploy-aws-staging.ps1, not this file. This is only a reference for an
+# scripts/deploy-aws-managed-legacy.ps1, not this file. This is only a reference for an
 # operator who deliberately runs Terraform directly. Never put a GHCR token here.
 
 # aws_profile is optional. Leave it unset to use normal AWS_* environment-variable

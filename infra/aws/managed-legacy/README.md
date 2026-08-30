@@ -1,9 +1,12 @@
-# PulseFlow AWS staging Terraform
+# Legacy PulseFlow AWS staging Terraform
 
-This directory is the one Terraform definition for the first real PulseFlow AWS
-staging environment. It supersedes the historical, unapplied Render definition as
-the deployment target; [`../render/`](../render/) remains intact as a portability
-reference and must not be applied or extended as part of this flow.
+> **Status: legacy historical implementation.** This is not the active AWS
+> deployment path. Do not apply it as the current environment. The active AWS
+> implementation is [`infra/aws/ec2/`](../ec2/).
+
+This directory preserves the former managed AWS staging Terraform implementation.
+It was previously selected over the historical, unapplied Render definition;
+[`../../render/`](../../render/) remains intact as a portability reference.
 
 The selected first-plan region is **`eu-central-1` (Frankfurt)**. All sizes and the
 price checkpoint below use that region. Changing the region is a paid-architecture
@@ -35,7 +38,7 @@ liveness endpoint. HTTPS is deliberately deferred because PulseFlow has no accep
 domain or certificate yet.
 
 The ECS service runs one API task after deployment. The Terraform service starts at
-`desired_count = 0`, then `scripts/deploy-aws-staging.ps1` runs the same-image
+`desired_count = 0`, then `scripts/deploy-aws-managed-legacy.ps1` runs the same-image
 migration task and changes it to exactly one only after that task exits 0. Terraform
 ignores subsequent service task-definition and desired-count changes so it cannot
 bypass the migration gate on later revisions. This is deliberate deployment
@@ -102,7 +105,7 @@ Amazon MQ requires its initial RabbitMQ user while Terraform creates the broker.
 Terraform generates that password, so **local Terraform state is sensitive**: it
 contains the generated Amazon MQ password and the provider's sensitive broker-user
 data. The RDS managed password and GHCR token are not in state. State lives by
-default at `infra/aws/terraform.tfstate`; the repository `.gitignore` already excludes
+default at `infra/aws/managed-legacy/terraform.tfstate`; the repository `.gitignore` already excludes
 it, state backups, plans, provider work directories, and real `.tfvars` files. Keep
 the state and any backup in encrypted developer-controlled storage. Losing it makes
 future Terraform management substantially harder.
@@ -142,7 +145,7 @@ credential that has only the package-read access needed for that image.
 From the repository root, install Terraform and AWS CLI v2, then run:
 
 ```powershell
-pwsh ./scripts/deploy-aws-staging.ps1
+pwsh ./scripts/deploy-aws-managed-legacy.ps1
 ```
 
 The script resolves the full installed executable paths itself. It checks `PATH` first,
@@ -158,7 +161,7 @@ profile is required. An existing profile remains an optional override for operat
 who explicitly need one:
 
 ```powershell
-pwsh ./scripts/deploy-aws-staging.ps1 -AwsProfile <optional-profile-name>
+pwsh ./scripts/deploy-aws-managed-legacy.ps1 -AwsProfile <optional-profile-name>
 ```
 
 The default command performs this reproducible, plan-only sequence:
@@ -172,7 +175,7 @@ The default command performs this reproducible, plan-only sequence:
 5. runs `terraform fmt -check -recursive`, `terraform init`, and `terraform validate`;
 6. runs the real Terraform plan, passing only `aws_region`, `pulseflow_image`, and the
    resulting GHCR secret ARN as Terraform variables; and
-7. saves the plan to `infra/aws/pulseflow-staging.tfplan` and stops.
+7. saves the plan to `infra/aws/managed-legacy/pulseflow-staging.tfplan` and stops.
 
 The GHCR JSON value (`username` and `password`) is written to a temporary local file
 only so AWS CLI does not receive the token as a command-line argument; the file is
@@ -194,11 +197,11 @@ infrastructure. Keep every lifecycle phase separate and inspectable:
    Terraform configuration, then save a plan. This command does not apply it.
 
    ```powershell
-   pwsh ./scripts/deploy-aws-staging.ps1
+   pwsh ./scripts/deploy-aws-managed-legacy.ps1
    ```
 
 2. **Review plan/cost and approve** — inspect
-   `infra/aws/pulseflow-staging.tfplan`, its planned resources, and the cost checkpoint
+   `infra/aws/managed-legacy/pulseflow-staging.tfplan`, its planned resources, and the cost checkpoint
    below. Obtain explicit approval before continuing.
 
 3. **APPLY** — load root `.env`, validate the AWS identity, and apply only the existing
@@ -206,14 +209,14 @@ infrastructure. Keep every lifecycle phase separate and inspectable:
    deployment. After success, the ECS service remains at desired count zero.
 
    ```powershell
-   pwsh ./scripts/deploy-aws-staging.ps1 -Apply
+   pwsh ./scripts/deploy-aws-managed-legacy.ps1 -Apply
    ```
 
 4. **DEPLOY + VERIFY** — run the migration, roll out the API, require health checks,
    and execute the ingestion smoke proof. This phase is never started by `-Apply`.
 
    ```powershell
-   pwsh ./scripts/deploy-aws-staging.ps1 -Deploy
+   pwsh ./scripts/deploy-aws-managed-legacy.ps1 -Deploy
    ```
 
 5. **DESTROY** — load root `.env`, validate the AWS identity, resolve the existing
@@ -221,7 +224,7 @@ infrastructure. Keep every lifecycle phase separate and inspectable:
    that Terraform state is empty.
 
    ```powershell
-   pwsh ./scripts/deploy-aws-staging.ps1 -Destroy
+   pwsh ./scripts/deploy-aws-managed-legacy.ps1 -Destroy
    ```
 
    Normal destroy removes the expensive staging environment but deliberately keeps the
@@ -232,7 +235,7 @@ infrastructure. Keep every lifecycle phase separate and inspectable:
    Terraform destruction succeeds:
 
    ```powershell
-   pwsh ./scripts/deploy-aws-staging.ps1 -Destroy -DeleteBootstrapSecret
+   pwsh ./scripts/deploy-aws-managed-legacy.ps1 -Destroy -DeleteBootstrapSecret
    ```
 
    `-DeleteBootstrapSecret` is valid only with `-Destroy`; it never runs implicitly.
@@ -281,8 +284,8 @@ migration bundle. `-Apply` stops after infrastructure creation; `-Deploy` must b
 requested separately.
 
 ```powershell
-pwsh ./scripts/deploy-aws-staging.ps1 -Apply
-pwsh ./scripts/deploy-aws-staging.ps1 -Deploy
+pwsh ./scripts/deploy-aws-managed-legacy.ps1 -Apply
+pwsh ./scripts/deploy-aws-managed-legacy.ps1 -Deploy
 ```
 
 Run both commands from the repository root. The post-apply rollout performs, in order:
@@ -332,7 +335,7 @@ To recreate, repeat the lifecycle above: root `.env` → bootstrap/identify GHCR
 To remove the disposable environment after evidence has been recorded, run:
 
 ```powershell
-pwsh ./scripts/deploy-aws-staging.ps1 -Destroy
+pwsh ./scripts/deploy-aws-managed-legacy.ps1 -Destroy
 ```
 
 `-Destroy` uses the same non-secret Terraform inputs (`aws_region`, `pulseflow_image`,

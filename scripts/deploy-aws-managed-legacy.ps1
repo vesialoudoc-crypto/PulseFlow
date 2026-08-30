@@ -1,6 +1,8 @@
+# Legacy managed AWS lifecycle script. It is not an EC2 deployment workflow and must
+# not be used as the active AWS environment path.
 [CmdletBinding(DefaultParameterSetName = "Plan")]
 param(
-    [string]$TerraformDirectory = (Join-Path $PSScriptRoot "..\infra\aws"),
+    [string]$TerraformDirectory = (Join-Path $PSScriptRoot "..\infra\aws\managed-legacy"),
     [string]$AwsProfile,
     [Parameter(ParameterSetName = "Apply", Mandatory)]
     [switch]$Apply,
@@ -14,6 +16,8 @@ param(
 
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
+
+Write-Warning "This is a legacy managed AWS lifecycle script, not the active EC2 workflow."
 
 if ($DeleteBootstrapSecret -and -not $Destroy) {
     throw "-DeleteBootstrapSecret is valid only together with -Destroy."
@@ -365,7 +369,7 @@ function Invoke-AwsStagingPlan {
         Pop-Location
     }
 
-    Write-Host "Terraform plan saved to infra/aws/pulseflow-staging.tfplan. Terraform apply was not run."
+    Write-Host "Terraform plan saved to infra/aws/managed-legacy/pulseflow-staging.tfplan. Terraform apply was not run."
 }
 
 function Invoke-AwsStagingApply {
@@ -378,7 +382,7 @@ function Invoke-AwsStagingApply {
 
     $savedPlanPath = Join-Path $TerraformDirectory "pulseflow-staging.tfplan"
     if (-not (Test-Path -LiteralPath $savedPlanPath -PathType Leaf)) {
-        throw "Reviewed saved Terraform plan is missing: infra/aws/pulseflow-staging.tfplan. Run pwsh ./scripts/deploy-aws-staging.ps1, review the plan, and explicitly approve it before retrying -Apply."
+        throw "Reviewed saved Terraform plan is missing: infra/aws/managed-legacy/pulseflow-staging.tfplan. Run pwsh ./scripts/deploy-aws-managed-legacy.ps1, review the plan, and explicitly approve it before retrying -Apply."
     }
 
     Push-Location $TerraformDirectory
@@ -387,7 +391,7 @@ function Invoke-AwsStagingApply {
 
         & $script:terraformExecutable apply -input=false "pulseflow-staging.tfplan"
         if ($LASTEXITCODE -ne 0) {
-            throw "Terraform could not apply the reviewed saved plan. Ensure infra/aws/pulseflow-staging.tfplan was created with the installed Terraform version and is still compatible. The script did not generate a replacement plan."
+            throw "Terraform could not apply the reviewed saved plan. Ensure infra/aws/managed-legacy/pulseflow-staging.tfplan was created with the installed Terraform version and is still compatible. The script did not generate a replacement plan."
         }
     }
     finally {

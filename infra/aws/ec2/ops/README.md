@@ -1,4 +1,4 @@
-# AWS EC2 Low-Performance Operations
+# AWS EC2 Operations
 
 Terraform creates clean hosts. This directory configures and operates
 already-created hosts. Terraform never invokes this directory.
@@ -6,10 +6,10 @@ already-created hosts. Terraform never invokes this directory.
 Use Session Manager to open an interactive shell on exactly one running host:
 
 ```powershell
-./infra/ops/aws-ec2-low-performance/connect.ps1 app
-./infra/ops/aws-ec2-low-performance/connect.ps1 rabbitmq
-./infra/ops/aws-ec2-low-performance/connect.ps1 redis
-./infra/ops/aws-ec2-low-performance/connect.ps1 postgres
+./infra/aws/ec2/ops/connect.ps1 app
+./infra/aws/ec2/ops/connect.ps1 rabbitmq
+./infra/aws/ec2/ops/connect.ps1 redis
+./infra/aws/ec2/ops/connect.ps1 postgres
 ```
 
 The script needs AWS CLI v2, the Session Manager plugin, a configured AWS credential

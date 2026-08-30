@@ -4,7 +4,7 @@ resource "aws_vpc" "environment" {
   enable_dns_support   = true
 
   tags = {
-    Name = "pulseflow-ec2-low-performance-vpc"
+    Name = "pulseflow-ec2-vpc"
   }
 }
 
@@ -12,7 +12,7 @@ resource "aws_internet_gateway" "environment" {
   vpc_id = aws_vpc.environment.id
 
   tags = {
-    Name = "pulseflow-ec2-low-performance-igw"
+    Name = "pulseflow-ec2-igw"
   }
 }
 
@@ -23,7 +23,7 @@ resource "aws_subnet" "public" {
   map_public_ip_on_launch = true
 
   tags = {
-    Name = "pulseflow-ec2-low-performance-public-${local.availability_zone}"
+    Name = "pulseflow-ec2-public-${local.availability_zone}"
   }
 }
 
@@ -36,7 +36,7 @@ resource "aws_route_table" "public" {
   }
 
   tags = {
-    Name = "pulseflow-ec2-low-performance-public"
+    Name = "pulseflow-ec2-public"
   }
 }
 

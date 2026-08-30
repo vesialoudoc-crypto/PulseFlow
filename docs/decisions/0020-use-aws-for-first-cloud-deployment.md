@@ -52,7 +52,7 @@ cloud-deployment objective.
 ## Consequences
 
 - The first cloud implementation will use AWS-specific Terraform resources in a future
-  `infra/aws/` directory. It must not modify or delete `infra/render/`.
+  `infra/aws/managed-legacy/` directory. It must not modify or delete `infra/render/`.
 - The same OCI artifact, health endpoints, connection-string contract, migration
   bundle, and deployment lifecycle concepts remain portable.
 - The first environment's cost is materially dominated by Amazon MQ. Its use is

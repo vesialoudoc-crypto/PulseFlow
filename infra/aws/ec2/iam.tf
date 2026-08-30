@@ -12,7 +12,7 @@ data "aws_iam_policy_document" "ec2_assume_role" {
 }
 
 resource "aws_iam_role" "ssm" {
-  name               = "pulseflow-ec2-low-performance-ssm"
+  name               = "pulseflow-ec2-ssm"
   assume_role_policy = data.aws_iam_policy_document.ec2_assume_role.json
 }
 
@@ -22,6 +22,6 @@ resource "aws_iam_role_policy_attachment" "ssm" {
 }
 
 resource "aws_iam_instance_profile" "ssm" {
-  name = "pulseflow-ec2-low-performance-ssm"
+  name = "pulseflow-ec2-ssm"
   role = aws_iam_role.ssm.name
 }

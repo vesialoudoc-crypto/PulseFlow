@@ -34,7 +34,7 @@ not help the short-lived learning and deployment-proof objective.
 ## Decision
 
 Replace `infra/aws-ec2-performance/` with a minimal
-`infra/aws-ec2-low-performance/` Terraform root. Terraform provisions one VPC, one
+`infra/aws/ec2/` Terraform root. Terraform provisions one VPC, one
 public subnet and egress route, security groups, a minimal SSM IAM role/profile, and
 four Amazon Linux 2023 x86_64 EC2 hosts: app, RabbitMQ, Redis, and PostgreSQL.
 
@@ -43,7 +43,7 @@ install Docker; configure service software; create secrets or credentials; retri
 images; perform migrations, readiness checks, or traffic tests; schedule instances;
 or start, stop, or deploy hosts.
 
-Add `infra/ops/aws-ec2-low-performance/` as the separate explicit operations layer.
+Add `infra/aws/ec2/ops/` as the separate explicit operations layer.
 It begins with an SSM shell connector and a standalone Docker installation script.
 Runtime deployment remains a future decision and implementation.
 

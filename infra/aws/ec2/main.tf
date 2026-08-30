@@ -15,7 +15,7 @@ provider "aws" {
 
   default_tags {
     tags = {
-      Environment = "ec2-low-performance"
+      Environment = "ec2"
       ManagedBy   = "Terraform"
       Project     = "PulseFlow"
     }
