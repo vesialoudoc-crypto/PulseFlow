@@ -1,43 +1,104 @@
 # AWS EC2 Operations
 
-Terraform creates clean hosts. This directory configures and operates
-already-created hosts. Terraform never invokes this directory.
+Terraform creates clean EC2 hosts, networking, and the instance IAM role. This
+directory performs explicit AWS-specific bootstrap, transport, and inspection on
+already-created hosts. Terraform never invokes these scripts.
 
-Use Session Manager to open an interactive shell on exactly one running host:
+`infra/runtime` defines the provider-independent service runtime. This directory
+does not alter its Compose topology; it transports the reviewed runtime files to AWS
+EC2 hosts through Systems Manager.
 
-```powershell
-./infra/aws/ec2/ops/connect.ps1 app
-./infra/aws/ec2/ops/connect.ps1 rabbitmq
-./infra/aws/ec2/ops/connect.ps1 redis
-./infra/aws/ec2/ops/connect.ps1 postgres
-```
+## Prerequisites
 
-The script needs AWS CLI v2, the Session Manager plugin, a configured AWS credential
-context, and the correct selected AWS region. It finds a single `running` instance by
-its exact `Name` tag (for example, `pulseflow-app`) and opens an SSM shell. It fails
-instead of choosing when no matching running instance or more than one exists.
+The scripts require AWS CLI v2, a local AWS credential context that can access
+Frankfurt (`eu-central-1`), and the `AmazonSSMManagedInstanceCore` instance role
+provisioned by the EC2 Terraform root. `connect.ps1` additionally needs the AWS
+Session Manager plugin. No script uses Terraform state, Terraform output, SSH, S3,
+Secrets Manager, or Parameter Store.
 
-After connecting, transfer the reviewed `install-docker.sh` to the target through an
-explicit operator-controlled SSM method, then run it as the Docker foundation:
+Each role is discovered through AWS CLI `ec2 describe-instances` using its exact
+`Name` tag and the `running` state:
 
-```bash
-bash install-docker.sh
-```
+| Role | Name tag |
+| --- | --- |
+| `app` | `pulseflow-app` |
+| `postgres` | `pulseflow-postgres` |
+| `rabbitmq` | `pulseflow-rabbitmq` |
+| `redis` | `pulseflow-redis` |
 
-The script installs Docker from Amazon Linux 2023 repositories, starts it, adds the
-actual invoking non-root Session Manager user to the `docker` group, and prints the
-Docker server version. Reconnect after it finishes so the new group membership applies.
+Discovery requires exactly one matching running instance and a private IP address.
+It fails rather than choosing an ambiguous host.
 
-The intended future runtime topology is:
+## Operational sequence
 
 ```text
-app EC2:       HAProxy, PulseFlow.Api #1, PulseFlow.Api #2
-rabbitmq EC2:  RabbitMQ
-redis EC2:     Redis
-postgres EC2:  PostgreSQL
+Terraform
+  -> creates EC2, network, and IAM
+
+bootstrap.ps1
+  -> installs and starts Docker Engine plus the pinned Docker Compose v2 plugin
+     through SSM Run Command
+
+copy-runtime.ps1
+  -> copies portable runtime configuration through SSM Run Command
+
+future secret/config step
+  -> not implemented
+
+future deployment step
+  -> docker compose up, not implemented
 ```
 
-Provider-independent Compose topology now lives in
-[`../../../runtime/`](../../../runtime/). Service installation, image pull,
-credential provision, migration execution, and runtime deployment on a real host
-remain explicit operations work.
+Bootstrap one host, or all four hosts:
+
+```powershell
+pwsh ./infra/aws/ec2/ops/bootstrap.ps1 app
+pwsh ./infra/aws/ec2/ops/bootstrap.ps1 all
+```
+
+`bootstrap.ps1` sends the local `install-docker.sh` as Base64 over SSM Run Command,
+executes it from a temporary remote file, waits for completion, and removes that
+temporary file. The installer is idempotent: it ensures Docker Engine is enabled and
+started, then installs the pinned `v2.32.4` Compose CLI plugin for x86_64 hosts at
+`/usr/local/lib/docker/cli-plugins/docker-compose`. It verifies both `docker version`
+and `docker compose version`; it does not install the legacy `docker-compose` command.
+
+Copy a role's portable runtime files, or all four definitions:
+
+```powershell
+pwsh ./infra/aws/ec2/ops/copy-runtime.ps1 app
+pwsh ./infra/aws/ec2/ops/copy-runtime.ps1 all
+```
+
+The destination is `/opt/pulseflow/runtime/<role>/`. The application host receives
+`compose.yaml` and `haproxy.cfg`; every other host receives `compose.yaml`.
+Transport uses Base64 into a temporary remote staging directory, then installs
+readable files into the destination and removes the staging directory. Each copy
+performs `docker compose config` remotely. Required Compose values use temporary
+placeholder values in that command only; no runtime secret or `.env` file is created.
+
+Inspect all four hosts:
+
+```powershell
+pwsh ./infra/aws/ec2/ops/status.ps1
+```
+
+The status output shows instance identity, private IP, SSM managed/online state,
+Docker state when SSM is online, and whether the expected runtime directory exists.
+Containers are intentionally not expected to run yet.
+
+Open an interactive Session Manager shell on one host:
+
+```powershell
+pwsh ./infra/aws/ec2/ops/connect.ps1 app
+pwsh ./infra/aws/ec2/ops/connect.ps1 rabbitmq
+pwsh ./infra/aws/ec2/ops/connect.ps1 redis
+pwsh ./infra/aws/ec2/ops/connect.ps1 postgres
+```
+
+## Deliberately deferred
+
+This foundation does not create AWS resources, start containers, pull an image, run
+migrations, create a `.env` file, or run `docker compose up`. It does not transmit
+real PostgreSQL or RabbitMQ passwords, a GHCR token, or any other runtime secret.
+Secret/config delivery and runtime deployment are separate future operations steps.

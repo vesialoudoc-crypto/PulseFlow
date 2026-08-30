@@ -512,7 +512,13 @@ been manually removed and its local Terraform state discarded. Its lifecycle scr
 runtime bootstrap, scheduler, runtime secrets, image handling, load generator, and
 deployment automation are no longer live repository behavior. Historical checkpoints
 and ADRs preserve that history. The new boundary is Terraform provisioning → clean
-hosts → explicit SSM/Linux operations → future Docker/runtime deployment. Terraform
+hosts → explicit SSM/Linux operations → future Docker/runtime deployment. The current
+operations foundation discovers running role hosts through exact EC2 `Name` tags in
+Frankfurt, installs Docker Engine and the Docker Compose CLI plugin with SSM Run
+Command, copies the matching portable runtime definition, validates it with temporary
+placeholder environment values, and inspects
+SSM/Docker/runtime-directory status. It does not transmit real credentials or start
+containers. Terraform
 does not use user data or install Docker, configure services, create secrets, pull
 images, run migrations or tests, or start/stop/deploy EC2 hosts. See [AWS EC2
 Environment](architecture/aws-ec2-environment.md)

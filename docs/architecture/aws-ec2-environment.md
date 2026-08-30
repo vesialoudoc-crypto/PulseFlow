@@ -24,8 +24,13 @@ the first two lines. It has no user data and does not install Docker, configure
 runtime services, manage credentials, pull images, run migrations, test readiness,
 schedule instance lifecycle, or orchestrate deployment.
 
-[`infra/aws/ec2/ops/`](../../infra/aws/ec2/ops/)
-contains the small, explicit operations foundation. Terraform never invokes it.
+[`infra/aws/ec2/ops/`](../../infra/aws/ec2/ops/) contains the small, explicit
+operations foundation. It discovers exactly one running host per role from its EC2
+`Name` tag in `eu-central-1`, uses SSM Run Command to install Docker Engine and the
+Docker Compose CLI plugin, transport the matching portable runtime definition, and
+inspect SSM, Docker, and runtime-directory state. It does not deliver real runtime
+secrets or start the runtime.
+Terraform never invokes it.
 
 ## Provisioned infrastructure
 
@@ -77,6 +82,6 @@ postgres EC2:  PostgreSQL
 Provider-independent Compose definitions for these four hosts now live in
 [`infra/runtime/`](../../infra/runtime/). They receive dependency addresses and
 credentials from host environment variables and do not perform provider-specific host
-operations. Linux package installation, Docker configuration on a real host, image
-retrieval, service execution, migrations, and smoke checks remain explicit future
-operations work.
+operations. The AWS operations foundation can install Docker and copy these files to a
+real host, but image retrieval, secret/config delivery, service execution, migrations,
+and smoke checks remain explicit future work.
