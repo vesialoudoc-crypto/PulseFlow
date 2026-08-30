@@ -510,8 +510,8 @@ release mechanism are accepted in ADRs 0020 and 0021. ADRs 0022 and 0023 record
 superseded historical decisions for the coupled EC2 performance topology, its
 root-disk-only storage, SSM operator path, and timezone-aware start/stop schedule.
 ADR 0025 is the current accepted Terraform-versus-runtime operations boundary,
-implemented by `infra/aws/ec2`. Automatic deployment/CI/CD, a real EC2
-deployed observability and performance measurement, a measured bottleneck and
+implemented by `infra/aws/ec2`. Automatic deployment/CI/CD, deployed observability
+and performance measurement, a measured bottleneck and
 justified before/after optimization, production networking/HA,
 restricted RabbitMQ user management, and the final production topology remain
 unresolved. API and RabbitMQ-consumer decoupling also remains deferred.
