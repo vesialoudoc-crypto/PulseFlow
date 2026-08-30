@@ -35,7 +35,7 @@ real plan, not a claim that resources already exist.
 ## Decision
 
 Use `eu-central-1` (Frankfurt) for the first reviewed staging plan. Define the AWS
-environment with flat HashiCorp AWS-provider resources in `infra/aws/`:
+environment with flat HashiCorp AWS-provider resources in `infra/aws/managed-legacy/`:
 
 - a VPC with two public subnets and two private/data subnets; no NAT Gateway;
 - a public HTTP Application Load Balancer, with `/health/ready` target health checks;

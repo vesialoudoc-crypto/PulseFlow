@@ -492,5 +492,6 @@ tests/performance/results/
 *.tfstate
 *.tfstate.*
 *.tfvars
+tfplan
 *.tfplan
 !*.tfvars.example

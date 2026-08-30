@@ -4,7 +4,10 @@
 
 ## Status
 
-Accepted
+Superseded by [ADR 0025](0025-separate-ec2-provisioning-from-runtime-operations.md).
+
+This remains the historical record of the cost reduction applied to the retired
+five-node coupled EC2 implementation.
 
 ## Context
 
