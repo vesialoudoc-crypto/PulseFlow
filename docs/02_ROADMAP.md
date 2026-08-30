@@ -364,7 +364,7 @@ implement deployment, then investigate and optimize a measured deployed constrai
 
 ## Stage 5: Deployment to AWS
 
-**Status:** In progress (managed AWS lifecycle proven; EC2 provisioning and portable runtime definitions created; next: explicit host operations and runtime deployment)
+**Status:** In progress (managed AWS proof retained as historical evidence; EC2 lifecycle proven, smoke-tested end to end, and destroyed; next: observability and deployed performance measurement)
 
 ### Goals
 
@@ -441,93 +441,59 @@ allowing public-IP Fargate tasks whose security group accepts HTTP only from the
 PostgreSQL, Valkey, and RabbitMQ remain private. This is a staging boundary, not a
 production-networking claim.
 
-The first managed AWS Terraform definition is preserved in
-[`infra/aws/managed-legacy/`](../infra/aws/managed-legacy/). It is legacy historical
-infrastructure, not the active AWS deployment path, and must not be applied as the
-current environment. It is
-locally formatted and validated with Terraform 1.15.9, AWS provider 6.61.0, and Random
-provider 3.9.0. Its accepted first-plan configuration is Frankfurt (`eu-central-1`),
-a no-NAT VPC, ALB, one
-0.25-vCPU/512-MiB Fargate API task after successful deployment, private Single-AZ
-`db.t4g.micro` RDS PostgreSQL 17, ElastiCache Serverless Valkey 8, and a private
-RabbitMQ 4.2 `mq.m7g.medium` Amazon MQ single instance. It keeps the GHCR SHA image
-and adds an explicit deployment script: the service begins at zero tasks, a same-image
-migration task must exit zero, then the script rolls out exactly one API task and
-proves a unique HTTP-202 event reaches PostgreSQL. The configuration uses local
-sensitive state, external GHCR credential bootstrap, explicit execution/task roles,
-and a documented paid-resource checkpoint. See
-[AWS Staging Environment Architecture](architecture/aws-staging-environment.md) and
-[ADR 0021](decisions/0021-define-first-aws-staging-resource-configuration.md).
+The first managed AWS lifecycle is historical evidence, not the active deployment
+path. Its Terraform implementation and deployment tooling have been removed from the
+active repository tree; its approved architecture, lifecycle, and the 49-resource
+apply/destroy proof remain preserved in [AWS Staging Environment
+Architecture](architecture/aws-staging-environment.md), ADRs, pull requests, and Git
+history. The active AWS implementation is the EC2 root described below.
 
-The repository-root ignored `.env` is now the documented local bootstrap source for
-AWS credentials, region, the GHCR package-read credential, and the immutable image.
-The legacy managed-staging lifecycle used
-`pwsh ./scripts/deploy-aws-managed-legacy.ps1` to bootstrap the external GHCR secret without
-putting the token in Terraform, verifies the image, and saves a plan; after plan/cost
-review and approval, `-Apply` applies exactly that saved plan and stops with the ECS
-service at desired count zero; `-Deploy` separately runs migration, rollout, and the
-end-to-end smoke proof; `-Destroy` removes Terraform-managed resources and verifies
-empty Terraform state. Normal destroy keeps the external, non-Terraform-managed GHCR
-bootstrap secret reusable; `-Destroy -DeleteBootstrapSecret` is the separate explicit
-complete-bootstrap-cleanup mode. AWS profiles remain optional rather than a required
-second local credential store. The script resolves installed Terraform and AWS CLI v2
-executables itself: it uses `PATH` first, then WinGet Terraform and standard Windows
-AWS CLI locations. The current reviewed saved plan requires Terraform 1.15.8, which
-`-Apply` verifies before it can invoke Terraform apply.
+A second, separate AWS Terraform root in [`infra/aws/ec2/`](../infra/aws/ec2/)
+provides only the minimal EC2 provisioning layer. It does not replace or rewrite the
+managed proof. Its successful disposable proof created 16 resources, including one
+VPC, one public subnet, minimal SSM IAM, exact security-group paths, and four Amazon
+Linux 2023 x86_64 `t3.small` hosts: app, PostgreSQL, RabbitMQ, and Redis. There is no
+load-generator EC2; no k6 or other performance benchmark ran.
 
-The first disposable AWS lifecycle has been proven end to end. Terraform apply
-reported 49 added, 0 changed, and 0 destroyed. The deployment script then completed
-the migration ECS task, public-ALB `/health/live` and `/health/ready` HTTP-200 checks,
-an ingestion smoke POST returning HTTP 202, in-VPC PostgreSQL verification of the
-exact event, and removal of that exact smoke row. Terraform destroy subsequently
-reported 49 destroyed. Its post-destroy verification then exposed a PowerShell
-empty-pipeline `.Count` defect; a manual non-mutating `terraform state list` returned
-empty, confirming the Terraform-managed staging environment had been removed. The
-external GHCR bootstrap secret remains intentionally reusable because normal
-`-Destroy` was used without `-DeleteBootstrapSecret`.
-
-The first deployment also established that the RDS-managed master secret contains
-credentials, not endpoint metadata. Deployment tooling now obtains endpoint, port,
-and database name from `rds describe-db-instances` and retains the credential secret
-only for username and password. This is a correction within the accepted architecture,
-not a change to its resource mapping or lifecycle sequence.
-
-A second, separate AWS Terraform root now provides only a minimal EC2 provisioning
-layer in [`infra/aws/ec2/`](../infra/aws/ec2/). It
-does not replace or rewrite the managed proof. Terraform would create one VPC, one
-public subnet, minimal SSM IAM, exact security-group paths, and four clean Amazon
-Linux 2023 x86_64 hosts: app, RabbitMQ, Redis, and PostgreSQL. Each defaults to
-`t3.small` with an 8-GiB encrypted gp3 root disk. There is no load-generator EC2;
-future k6 traffic originates externally.
-
-Provider-independent, distributed multi-host runtime definitions now live in
-[`infra/runtime/`](../infra/runtime/). They define one Compose project per PostgreSQL,
+Provider-independent, distributed multi-host runtime definitions in
+[`infra/runtime/`](../infra/runtime/) define one Compose project per PostgreSQL,
 RabbitMQ, Redis, and application host; the application host runs HAProxy, two API
 replicas, and a one-shot migration bundle. Cross-host addresses and secrets are
 provided through environment variables. These definitions are not AWS deployment
-automation and have not been started on an EC2 host.
+automation, but they were copied to and started on the corresponding EC2 hosts through
+the explicit operations procedure.
+
+All four hosts became reachable through SSM. Docker Engine and Docker Compose were
+installed and running. PostgreSQL, RabbitMQ, and Redis containers started successfully;
+the app host ran HAProxy, both API replicas, and the one-shot EF migration bundle. The
+migration bundle initially required an explicit `--connection` argument; after that
+correction, migrations completed. Internal readiness through HAProxy returned HTTP 200
+with `Healthy`, and the EC2 public app endpoint also returned `Healthy`. An external
+NDJSON `POST /api/events` returned HTTP 202 Accepted. The exact event was found in
+PostgreSQL, then its smoke-test row was removed.
 
 The former coupled EC2 implementation was retired after its AWS resources had already
 been manually removed and its local Terraform state discarded. Its lifecycle script,
 runtime bootstrap, scheduler, runtime secrets, image handling, load generator, and
 deployment automation are no longer live repository behavior. Historical checkpoints
-and ADRs preserve that history. The new boundary is Terraform provisioning → clean
-hosts → explicit SSM/Linux operations → future Docker/runtime deployment. The current
-operations foundation discovers running role hosts through exact EC2 `Name` tags in
-Frankfurt, installs Docker Engine and the Docker Compose CLI plugin with SSM Run
-Command, copies the matching portable runtime definition, validates it with temporary
-placeholder environment values, and inspects
-SSM/Docker/runtime-directory status. It does not transmit real credentials or start
-containers. Terraform
+and ADRs preserve that history. The active boundary is Terraform provisioning → clean
+hosts → explicit SSM/Linux operations → provider-independent runtime definitions →
+explicit manual runtime deployment. The operations foundation discovers running role
+hosts through exact EC2 `Name` tags in Frankfurt, installs Docker Engine and the
+Docker Compose CLI plugin with SSM Run Command, copies the matching portable runtime
+definition, validates it with temporary placeholder environment values, and inspects
+SSM/Docker/runtime-directory status. The successful proof used that operations layer,
+but Terraform does not invoke it. Terraform
 does not use user data or install Docker, configure services, create secrets, pull
 images, run migrations or tests, or start/stop/deploy EC2 hosts. See [AWS EC2
 Environment](architecture/aws-ec2-environment.md)
 and [ADR 0025](decisions/0025-separate-ec2-provisioning-from-runtime-operations.md).
 
-No new EC2 infrastructure has been created by this repository refactor. Actual apply,
-Linux/Docker configuration, runtime topology, migrations, smoke validation, and
-external performance traffic remain future work. Do not resume local bottleneck tuning
-on the shared Docker Desktop topology.
+Terraform destroy completed with `Destroy complete! Resources: 16 destroyed.` A
+subsequent `terraform state list` returned empty, so the disposable EC2 proof left no
+Terraform-managed resources. The proof did not include k6 traffic, performance or
+bottleneck measurements, deployed observability, or an automated deployment pipeline.
+Do not resume local bottleneck tuning on the shared Docker Desktop topology.
 
 Azure remains the later portability proof. Azure Container Apps, PostgreSQL Flexible
 Server, Azure Managed Redis, and a Container Apps migration job fit the application,
@@ -540,11 +506,13 @@ See [Cloud Portability Audit](architecture/cloud-portability-audit.md) and
 
 The first AWS managed-service mapping, staging networking boundary, selected first-plan
 region/sizes, local-state boundary, GHCR bootstrap boundary, and manual migration-first
-release mechanism are accepted in ADRs 0020 and 0021. The separate EC2 temporary
-performance topology, its root-disk-only storage, SSM operator path, and timezone-aware
-start/stop schedule are accepted in ADRs 0022 and 0023. Automatic deployment/CI/CD, a real EC2
-plan/apply proof, deployed observability and performance measurement, a measured
-bottleneck and justified before/after optimization, production networking/HA,
+release mechanism are accepted in ADRs 0020 and 0021. ADRs 0022 and 0023 record
+superseded historical decisions for the coupled EC2 performance topology, its
+root-disk-only storage, SSM operator path, and timezone-aware start/stop schedule.
+ADR 0025 is the current accepted Terraform-versus-runtime operations boundary,
+implemented by `infra/aws/ec2`. Automatic deployment/CI/CD, a real EC2
+deployed observability and performance measurement, a measured bottleneck and
+justified before/after optimization, production networking/HA,
 restricted RabbitMQ user management, and the final production topology remain
 unresolved. API and RabbitMQ-consumer decoupling also remains deferred.
 

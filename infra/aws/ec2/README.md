@@ -1,8 +1,8 @@
 # AWS EC2 Provisioning
 
-This root creates a deliberately small, disposable EC2 infrastructure layer. It is
-separate from the established managed AWS proof in [`../managed-legacy/`](../managed-legacy/), which this
-directory does not modify.
+This root creates a deliberately small, disposable EC2 infrastructure layer. The
+former managed AWS proof is preserved in repository history and is not live code that
+this directory can modify.
 
 Terraform creates only a dedicated VPC, one public subnet with Internet egress,
 four security groups, a minimal SSM instance role/profile, and four clean Amazon
@@ -23,8 +23,8 @@ Terraform provisioning ends when the four clean hosts are available through AWS
 Systems Manager Session Manager. It never invokes the operations layer.
 
 [`ops/`](ops/) contains
-the explicit SSM connection helper and a standalone Docker installation script for
-already-created hosts. Runtime deployment is intentionally deferred.
+the explicit AWS-specific SSM/host operations layer for already-created hosts. The
+runtime deployment procedure remains outside Terraform.
 
 ## Network rules
 
