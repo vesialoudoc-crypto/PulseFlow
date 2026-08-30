@@ -15,7 +15,8 @@ Terraform
   -> VPC + public subnet + security groups + minimal SSM IAM
   -> four clean Amazon Linux 2023 EC2 hosts
   -> explicit SSM / Linux operations
-  -> Docker and runtime deployment (deferred)
+  -> provider-independent Docker runtime definitions
+  -> host execution and runtime deployment (deferred)
 ```
 
 [`infra/aws/ec2/`](../../infra/aws/ec2/) owns only
@@ -73,6 +74,9 @@ redis EC2:     Redis
 postgres EC2:  PostgreSQL
 ```
 
-Linux package installation, Docker configuration, Compose topology, credentials,
-image retrieval, service configuration, migrations, and smoke checks remain explicit
-future operations work.
+Provider-independent Compose definitions for these four hosts now live in
+[`infra/runtime/`](../../infra/runtime/). They receive dependency addresses and
+credentials from host environment variables and do not perform provider-specific host
+operations. Linux package installation, Docker configuration on a real host, image
+retrieval, service execution, migrations, and smoke checks remain explicit future
+operations work.

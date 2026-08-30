@@ -364,7 +364,7 @@ implement deployment, then investigate and optimize a measured deployed constrai
 
 ## Stage 5: Deployment to AWS
 
-**Status:** In progress (managed AWS lifecycle proven; EC2 provisioning foundation created; next: explicit EC2 operations and runtime deployment)
+**Status:** In progress (managed AWS lifecycle proven; EC2 provisioning and portable runtime definitions created; next: explicit host operations and runtime deployment)
 
 ### Goals
 
@@ -499,6 +499,13 @@ public subnet, minimal SSM IAM, exact security-group paths, and four clean Amazo
 Linux 2023 x86_64 hosts: app, RabbitMQ, Redis, and PostgreSQL. Each defaults to
 `t3.small` with an 8-GiB encrypted gp3 root disk. There is no load-generator EC2;
 future k6 traffic originates externally.
+
+Provider-independent, distributed multi-host runtime definitions now live in
+[`infra/runtime/`](../infra/runtime/). They define one Compose project per PostgreSQL,
+RabbitMQ, Redis, and application host; the application host runs HAProxy, two API
+replicas, and a one-shot migration bundle. Cross-host addresses and secrets are
+provided through environment variables. These definitions are not AWS deployment
+automation and have not been started on an EC2 host.
 
 The former coupled EC2 implementation was retired after its AWS resources had already
 been manually removed and its local Terraform state discarded. Its lifecycle script,

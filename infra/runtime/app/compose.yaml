@@ -1,0 +1,51 @@
+x-api-environment: &api-environment
+  ASPNETCORE_URLS: "http://+:8080"
+  ConnectionStrings__PulseFlow: "Host=${PULSEFLOW_POSTGRES_HOST:?PULSEFLOW_POSTGRES_HOST must be set};Port=5432;Database=${PULSEFLOW_POSTGRES_DB:?PULSEFLOW_POSTGRES_DB must be set};Username=${PULSEFLOW_POSTGRES_USER:?PULSEFLOW_POSTGRES_USER must be set};Password=${PULSEFLOW_POSTGRES_PASSWORD:?PULSEFLOW_POSTGRES_PASSWORD must be set}"
+  ConnectionStrings__RabbitMq: "amqp://${PULSEFLOW_RABBITMQ_USER:?PULSEFLOW_RABBITMQ_USER must be set}:${PULSEFLOW_RABBITMQ_PASSWORD:?PULSEFLOW_RABBITMQ_PASSWORD must be set}@${PULSEFLOW_RABBITMQ_HOST:?PULSEFLOW_RABBITMQ_HOST must be set}:5672/"
+  ConnectionStrings__Redis: "${PULSEFLOW_REDIS_HOST:?PULSEFLOW_REDIS_HOST must be set}:6379,abortConnect=false"
+  RabbitMq__QueueName: "pulseflow.ingestion-batches"
+  RabbitMq__ConsumerCount: "1"
+  RabbitMq__PublisherChannelCount: "4"
+  Ingestion__ChunkCapacity: "100"
+  Ingestion__MaxBatchBytes: "10485760"
+  IngestionRateLimit__RequestLimit: "10000000"
+  IngestionRateLimit__WindowDuration: "00:01:00"
+
+x-migration-environment: &migration-environment
+  ConnectionStrings__PulseFlow: "Host=${PULSEFLOW_POSTGRES_HOST:?PULSEFLOW_POSTGRES_HOST must be set};Port=5432;Database=${PULSEFLOW_POSTGRES_DB:?PULSEFLOW_POSTGRES_DB must be set};Username=${PULSEFLOW_POSTGRES_USER:?PULSEFLOW_POSTGRES_USER must be set};Password=${PULSEFLOW_POSTGRES_PASSWORD:?PULSEFLOW_POSTGRES_PASSWORD must be set}"
+
+services:
+  migrations:
+    image: ${PULSEFLOW_IMAGE:?PULSEFLOW_IMAGE must be set}
+    entrypoint: ["/app/migrations/pulseflow-migrations"]
+    restart: "no"
+    environment: *migration-environment
+
+  api-1:
+    image: ${PULSEFLOW_IMAGE:?PULSEFLOW_IMAGE must be set}
+    restart: unless-stopped
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+    environment: *api-environment
+
+  api-2:
+    image: ${PULSEFLOW_IMAGE:?PULSEFLOW_IMAGE must be set}
+    restart: unless-stopped
+    depends_on:
+      migrations:
+        condition: service_completed_successfully
+    environment: *api-environment
+
+  haproxy:
+    image: haproxy:3.2.9-alpine
+    restart: unless-stopped
+    depends_on:
+      api-1:
+        condition: service_started
+      api-2:
+        condition: service_started
+    ports:
+      - "80:8080"
+    volumes:
+      - ./haproxy.cfg:/usr/local/etc/haproxy/haproxy.cfg:ro

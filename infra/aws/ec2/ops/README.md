@@ -37,5 +37,7 @@ redis EC2:     Redis
 postgres EC2:  PostgreSQL
 ```
 
-No Compose topology, service installation, image pull, credentials, migration, or
-runtime deployment is part of this task.
+Provider-independent Compose topology now lives in
+[`../../../runtime/`](../../../runtime/). Service installation, image pull,
+credential provision, migration execution, and runtime deployment on a real host
+remain explicit operations work.
