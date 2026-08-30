@@ -27,7 +27,7 @@ function Get-PulseFlowAwsCli {
     $awsExecutable = Get-RequiredCommand -Name "aws" -InstallHint "Install AWS CLI v2 and configure an AWS credential context."
     $versionOutput = @(& $awsExecutable --version 2>&1)
 
-    if ($LASTEXITCODE -ne 0 -or $versionOutput.Count -eq 0 -or $versionOutput[0] -notmatch "^aws-cli/2.") {
+    if ($LASTEXITCODE -ne 0 -or $versionOutput.Count -eq 0 -or $versionOutput[0] -notmatch "^aws-cli/2\.") {
         throw "AWS CLI v2 is required. Install AWS CLI v2 and configure an AWS credential context."
     }
 
