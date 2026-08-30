@@ -11,15 +11,14 @@ x-api-environment: &api-environment
   IngestionRateLimit__RequestLimit: "10000000"
   IngestionRateLimit__WindowDuration: "00:01:00"
 
-x-migration-environment: &migration-environment
-  ConnectionStrings__PulseFlow: "Host=${PULSEFLOW_POSTGRES_HOST:?PULSEFLOW_POSTGRES_HOST must be set};Port=5432;Database=${PULSEFLOW_POSTGRES_DB:?PULSEFLOW_POSTGRES_DB must be set};Username=${PULSEFLOW_POSTGRES_USER:?PULSEFLOW_POSTGRES_USER must be set};Password=${PULSEFLOW_POSTGRES_PASSWORD:?PULSEFLOW_POSTGRES_PASSWORD must be set}"
-
 services:
   migrations:
     image: ${PULSEFLOW_IMAGE:?PULSEFLOW_IMAGE must be set}
     entrypoint: ["/app/migrations/pulseflow-migrations"]
+    command:
+      - --connection
+      - "Host=${PULSEFLOW_POSTGRES_HOST:?PULSEFLOW_POSTGRES_HOST must be set};Port=5432;Database=${PULSEFLOW_POSTGRES_DB:?PULSEFLOW_POSTGRES_DB must be set};Username=${PULSEFLOW_POSTGRES_USER:?PULSEFLOW_POSTGRES_USER must be set};Password=${PULSEFLOW_POSTGRES_PASSWORD:?PULSEFLOW_POSTGRES_PASSWORD must be set}"
     restart: "no"
-    environment: *migration-environment
 
   api-1:
     image: ${PULSEFLOW_IMAGE:?PULSEFLOW_IMAGE must be set}

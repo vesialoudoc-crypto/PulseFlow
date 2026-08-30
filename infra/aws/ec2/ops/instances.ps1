@@ -4,6 +4,10 @@ param()
 Set-StrictMode -Version Latest
 $ErrorActionPreference = "Stop"
 
+if ($IsWindows) {
+    $env:AWS_CLI_OUTPUT_ENCODING = "UTF-8"
+}
+
 $script:PulseFlowAwsRegion = "eu-central-1"
 $script:PulseFlowEc2Roles = @("app", "postgres", "rabbitmq", "redis")
 
