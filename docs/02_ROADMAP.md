@@ -399,10 +399,15 @@ bottleneck investigation, one justified improvement, and before/after comparison
 
 ### Current implementation
 
+The **CI** workflow runs automatically on every `push` and `pull_request`, providing
+the repository's build, test, and formatting checks. This automatic CI does not
+deploy the application or publish an image.
+
 `PulseFlow.Api` is published to GitHub Container Registry only when a developer
 manually starts the **Publish PulseFlow.Api image** workflow from GitHub Actions. This
-explicit action represents a staging-image release. The workflow runs its build, test,
-formatting, and documentation checks before publishing. The image name is
+manual trigger controls GitHub Actions usage and cost for image publication and
+represents a staging-image release. The workflow runs its build, test, formatting,
+and documentation checks before publishing. The image name is
 `ghcr.io/<repository-owner>/pulseflow-api`. Every published image receives an
 immutable full-commit-SHA tag, `sha-<40-character-commit-sha>`, which is the
 deployable and auditable tag. The same image also receives the movable `develop` tag
