@@ -120,7 +120,8 @@ public sealed class RabbitMqIngestionBatchPublisherTests
         channelFactory.EnqueueChannel(PublishOutcome.BlockUntilCanceled, DisposalOutcome.Block);
         await using var publisher = CreatePublisher(channelFactory);
         await publisher.InitializeAsync(CancellationToken.None);
-        using var cancellationSource = new CancellationTokenSource(TimeSpan.FromMilliseconds(25));
+        using var cancellationSource = new CancellationTokenSource();
+        channelFactory.CreatedChannels.Single().OnBlockedPublishStarted = cancellationSource.Cancel;
 
         // Act
         var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
@@ -186,7 +187,8 @@ public sealed class RabbitMqIngestionBatchPublisherTests
         channelFactory.EnqueueChannel(PublishOutcome.Succeed);
         await using var publisher = CreatePublisher(channelFactory);
         await publisher.InitializeAsync(CancellationToken.None);
-        using var cancellationSource = new CancellationTokenSource(TimeSpan.FromMilliseconds(25));
+        using var cancellationSource = new CancellationTokenSource();
+        channelFactory.CreatedChannels[0].OnBlockedPublishStarted = cancellationSource.Cancel;
 
         // Act
         var exception = await Assert.ThrowsAnyAsync<OperationCanceledException>(() =>
@@ -197,6 +199,8 @@ public sealed class RabbitMqIngestionBatchPublisherTests
         Assert.Equal(cancellationSource.Token, exception.CancellationToken);
         Assert.Equal(1, channelFactory.CreatedChannels[0].PublishCount);
         Assert.Equal(1, channelFactory.CreatedChannels[1].PublishCount);
+        Assert.True(channelFactory.CreatedChannels[0].Disposed);
+        Assert.False(channelFactory.CreatedChannels[1].Disposed);
         Assert.True(publisher.HasUsableChannel);
     }
 
@@ -444,6 +448,8 @@ public sealed class RabbitMqIngestionBatchPublisherTests
 
         public bool DisposalStarted { get; private set; }
 
+        public Action? OnBlockedPublishStarted { get; set; }
+
         public void CompleteDisposal()
         {
             _disposeCompletion.TrySetResult();
@@ -474,9 +480,16 @@ public sealed class RabbitMqIngestionBatchPublisherTests
             return _outcome switch
             {
                 PublishOutcome.Succeed => Task.CompletedTask,
-                PublishOutcome.BlockUntilCanceled => Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken),
+                PublishOutcome.BlockUntilCanceled => BlockUntilCanceled(cancellationToken),
                 _ => throw new InvalidOperationException("Unsupported publish outcome."),
             };
+        }
+
+        private Task BlockUntilCanceled(CancellationToken cancellationToken)
+        {
+            var blockedPublish = Task.Delay(Timeout.InfiniteTimeSpan, cancellationToken);
+            OnBlockedPublishStarted?.Invoke();
+            return blockedPublish;
         }
 
         private ValueTask Dispose()
