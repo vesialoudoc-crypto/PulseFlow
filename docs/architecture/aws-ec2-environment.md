@@ -62,13 +62,13 @@ Instances can receive auto-assigned public IPv4 addresses for outbound access, w
 service communication remains private within the VPC. The only prepared inbound
 application/service paths are:
 
-- the required, non-global `allowed_http_source_cidr` → app TCP 80;
+- `allowed_http_source_cidr` → app TCP 80; the default `0.0.0.0/0` exposes the app HTTP port publicly, while a narrower CIDR is optional;
 - app security group → RabbitMQ TCP 5672;
 - app security group → Redis TCP 6379; and
 - app security group → PostgreSQL TCP 5432.
 
-RabbitMQ, Redis, and PostgreSQL have no public ingress. The `allowed_http_source_cidr`
-input makes the future test origin explicit and rejects `0.0.0.0/0`.
+SSH has no public ingress. RabbitMQ, Redis, and PostgreSQL accept service traffic only
+from the app security group through the private VPC.
 
 ## Proven runtime deployment
 

@@ -12,12 +12,12 @@ variable "aws_profile" {
 }
 
 variable "allowed_http_source_cidr" {
-  description = "CIDR permitted to send future external test HTTP traffic to pulseflow-app. Use the tester's narrowly scoped public CIDR; 0.0.0.0/0 is intentionally rejected."
+  description = "CIDR permitted to send external HTTP traffic to pulseflow-app."
   type        = string
 
   validation {
-    condition     = can(cidrnetmask(var.allowed_http_source_cidr)) && var.allowed_http_source_cidr != "0.0.0.0/0"
-    error_message = "allowed_http_source_cidr must be a valid, non-global IPv4 CIDR."
+    condition     = can(cidrnetmask(var.allowed_http_source_cidr))
+    error_message = "allowed_http_source_cidr must be a valid IPv4 CIDR."
   }
 }
 
